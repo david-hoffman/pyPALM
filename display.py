@@ -12,6 +12,12 @@ from numpy.core import atleast_1d, atleast_2d
 from numba import njit
 
 
+def palm_hist(df, yx_shape, subsampling=1):
+    bins = [np.arange(s + subsampling, step=subsampling) - subsampling / 2 for s in yx_shape]
+    # ungrouped 2d histogram to find peaks, ungrouped to make beads really stand out
+    return np.histogramdd(df[["y0", "x0"]].values, bins=bins)[0]
+    
+
 @njit
 def jit_hist3d(zpositions, ypositions, xpositions, shape):
     """Generate a histogram of points in 3D
