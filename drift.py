@@ -7,6 +7,13 @@ All code related to drift correction of PALM data
 Copyright (c) 2017, David Hoffman
 """
 
+import numpy as np
+import pandas as pd
+import tqdm
+import matplotlib.pyplot as plt
+from peaks.peakfinder import PeakFinder
+from skimage.filters import threshold_otsu
+from .display import palm_hist
 
 def remove_xy_mean(df):
     df_new = df.astype(np.float)
@@ -83,3 +90,26 @@ def plot_stats(fids_df):
     drift.hist(bins=64, normed=True, layout=(3,1), figsize=(3, 9))
 #     pd.plotting.table(plt.gca(), np.round(drift.describe(), 2), loc='upper right', colWidths=[0.2, 0.2, 0.2])
     print(drift.std() * 2 * np.sqrt(2 * np.log(2)))
+
+def find_fiducials(df, yx_shape, subsampling=1):
+    """Find fiducials in pointilist PALM data
+    
+    The key here is to realize that there should be on fiducial per frame"""
+    # incase we subsample the frame number
+    num_frames = df.frame.max() - df.frame.min()
+    hist_2d = palm_hist(df, yx_shape, subsampling)
+    pf = PeakFinder(hist_2d, 1)
+    pf.blob_sigma = 1/subsampling
+    # no blobs found so try again with a lower threshold
+    pf.thresh = 0
+    pf.find_blobs()
+    blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10)
+    if not pf.blobs.size:
+        # still no blobs then raise error
+        raise RuntimeError("No blobs found!")
+    pf.blobs = pf.blobs[pf.blobs[:,3] > blob_thresh]
+    if pf.blobs[:, 3].max() < num_frames * subsampling / 2:
+        print("Warning, drift maybe too high to find fiducials")
+    # correct positions for subsampling
+    pf.blobs[:, :2] = pf.blobs[:, :2] * subsampling
+    return pf
