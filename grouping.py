@@ -23,8 +23,7 @@ def find_matches(frames, radius):
     Returns
     -------
     pair_matches : list of lists
-        A list of matches, each match is also a list
-        see `query_ball_tree`
+        A list of closest matches
     """
     frame0, frame1 = frames
     t0 = cKDTree(frame0)
@@ -37,10 +36,11 @@ def find_matches(frames, radius):
             return [i, m[0]]
         elif len(m) == 0:
             # should never get here
-            raise RuntimeError
+            raise RuntimeError("Something went wrong in `closest_match`")
         distances = ((t0.data[i] - t1.data[m])**2).sum(1)
         return [i, m[distances.argmin()]]
     
+    # return a list with only the closest peak.
     pair_matches = [closest_match(m, i) for i, m in enumerate(pair_matches) if len(m)]
     return pair_matches
 
@@ -54,7 +54,6 @@ def group(df, radius, gap):
         peaks["group_id"] = -1
         if frame == 0:
             # group_id will be the index of the first peak
-            # make holder df for groups with extra "group lifetime" column (df_cache)
             df_cache = peaks
             df_cache.loc[peaks.index, "group_id"] = df_cache.index
             new_df_list.append(df_cache.copy())
@@ -64,9 +63,11 @@ def group(df, radius, gap):
         # get indices
         # need to deal with overlaps (two groups claim same peak)
         try:
-            # we don't want more than one match per cached peak.
+            # if there is a new peak that matches to two or more different cached peaks then the newer of the
+            # cached peaks claims it. If the cached peaks have the same age then its a toss up.
             cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
-        except ValueError:
+        except ValueError as error:
+            # should log the error or raise as a warning.
             pass
         else:
             # update groups
@@ -77,7 +78,8 @@ def group(df, radius, gap):
         # peaks.loc[(peaks.group_id != -1), "group_id"] = peaks.index
         # update df_cache and lifetimes
         # updating the cache takes a significant amount of time.
-        df_cache = pd.concat((df_cache, peaks)).drop_duplicates("group_id", "last")
+        df_cache = pd.concat((df_cache, peaks))
+        df_cache = df_cache.drop_duplicates("group_id", "last")
         df_cache = df_cache[(frame - df_cache.frame) < gap]
         new_df_list.append(peaks)
     return pd.concat(new_df_list)
