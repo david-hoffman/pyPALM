@@ -23,11 +23,15 @@ def remove_xy_mean(df):
 
 
 def calc_drift(fiducials_df, weighted="amp", diagnostics=False):
-    """"""
+    """Given a list of DataFrames with each DF containing the coordinates
+    of a single fiducial calculate the mean or weighted mean of the coordinates
+    in each frame."""
     if len(fiducials_df) == 1:
+        # if there is only one fiducial then return that
         return remove_xy_mean(fiducials_df[0])
     mean_removed = [remove_xy_mean(ff) for ff in fiducials_df]
     if diagnostics:
+        # debugging diagnostics
         fig, (ax0, ax1) = plt.subplots(1, 2)
         for ff in mean_removed:
             ff.x0.plot(ax=ax0)
@@ -35,17 +39,27 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False):
             
     # want to do a weighted average
     # need to reset_index after concatination so that all localzations have unique ID
+    # this will make weighting easier down the line.
     df_means = pd.concat(mean_removed).reset_index()
 
-    # Define a dictionary with the functions to apply for a given column:
+    # if weighted is something, use that as the weights for the mean
+    # if weighted is not a valid column name then it will raise an
+    # exception
     if weighted:
-        wm = lambda group: np.average(group, weights=df_means.loc[group.index, weighted])
+        # weight the coordinates
+        df_means[["x0", "y0", "z0"]] = df_means[["x0", "y0", "z0"]].mul(df_means[weighted], "index")
+        # groupby frame
+        temp = df_means.groupby("frame")
+        # calc weighted average
+        return temp[["x0", "y0", "z0"]].sum().div(temp[weighted].sum(), "index")
     else:
-        wm = "mean"
-    return df_means.groupby("frame").agg({"x0" : wm, "y0" : wm, "z0" : wm})
+        return df_means.groupby("frame")[["x0", "y0", "z0"]].mean()
 
 
 def remove_drift(df_data, drift):
+    """Remove the given drift from the data
+
+    Assumes that drift is a dataframe of coordinates indexed by frame."""
     # make our index frame number so that when we subtract drift it aligns automatically along
     # the index, this needs to be tested.
     # this also, conveniently, makes a copy of the data
@@ -59,7 +73,7 @@ def remove_drift(df_data, drift):
 
 def calc_fiducial_stats(fid_df_list):
     """Calculate various stats"""
-    fwhm = lambda x: x.std() * 2 * np.sqrt(2 * np.log(2))
+    fwhm = lambda x: x.std() * (2 * np.sqrt(2 * np.log(2)))
     fid_stats = pd.DataFrame([f[["x0", "y0","z0", "amp"]].mean() for f in fid_df_list])
     fid_stats[["xdrift", "ydrift", "zdrift"]] = pd.DataFrame([f.agg({"x0":fwhm,"y0":fwhm, "z0":fwhm}) for
                                                     f in fid_df_list])[["x0","y0", "z0"]]
