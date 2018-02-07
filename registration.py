@@ -14,6 +14,8 @@ import scipy.spatial.distance as distance
 import scipy.linalg as la
 import logging
 
+logger = logging.getLogger(__name__)
+
 
 class BaseCPD(object):
     """Base class for the coherent point drift algorithm based on:
@@ -70,12 +72,12 @@ class BaseCPD(object):
         c *= self.M / self.N
         # sum along the moving points, i.e. along M
         denominator = p_mat.sum(0, keepdims=True)
-        assert denominator.size == self.N, "Calculation of denominator failed {}".format(denominator.shape)
+        assert denominator.shape == (1, self.N), "Calculation of denominator failed {}".format(denominator.shape)
         # check if denominator is all zeros, which means p_mat is all zeros
-        if (denominator == 0).all():
+        if (denominator <= np.finfo(float).eps).all():
             # then the final p should just be a uniform distribution
             # should log or warn user this is happening
-            logging.warning("P_mat is null, resetting to uniform probabilities")
+            logger.debug("P_mat is null, resetting to uniform probabilities")
             p_old = np.ones_like(p_mat) / self.M
         else:
             p_old = p_mat / (denominator + c)
@@ -120,7 +122,7 @@ class BaseCPD(object):
         if self.var < np.finfo(float).eps:
             # self.var = np.finfo(float).eps
             self.var = self.tol
-            logging.warning("Variance has dropped below machine precision, setting to {}".format(self.var))
+            logger.debug("Variance has dropped below machine precision, setting to {}".format(self.var))
             # self.var = self.init_var = self.init_var * 2
             # self.translation = -self.Y.mean(axis=0) + self.X.mean(axis=0)
             # print("Var small resetting to", self.var)
@@ -134,8 +136,22 @@ class BaseCPD(object):
         return np.sqrt(self.p_old * self.dist_matrix).mean()
         # return np.sqrt(((self.X - self.TY)**2).sum(1)).mean()
     
-    def __call__(self, tol=1e-6, dist_tol=1e-6, maxiters=1000, init_var=None, weight=0, B=None, translation=None):
-        """perform the actual registration"""
+    def __call__(self, tol=1e-6, dist_tol=1e-12, maxiters=1000, init_var=None, weight=0, B=None, translation=None):
+        """perform the actual registration
+
+        Parameters
+        ----------
+        tol : float
+        dist_tol : float
+            Stop the iteration of the average distance between matching points is
+            less than this number. This is really only necessary for synthetic data
+            with no noise
+        maxiters : int
+        init_var : float
+        weight : float
+        B : ndarray (D, D)
+        translation : ndarray (1, D)
+        """
         # initialize starting transform if requested
         if translation is None:
             translation = np.ones((1, self.D))
@@ -165,16 +181,20 @@ class BaseCPD(object):
             if self.iteration > 0:
                 # now update Q to follow convergence
                 # we want to minimize Q so Q_old should be more positive than the new Q
-                Q_delta = np.abs(self.Q_old - self.Q) / np.abs(self.Q_old)
+                Q_delta = np.abs(self.Q_old - self.Q)  # / np.abs(self.Q_old)
                 if Q_delta < 0:
-                    logging.warning("Q_delta = {}".format(Q_delta))
-                logging.debug("Q_delta = {}".format(Q_delta))
-                if Q_delta <= tol or self.rmse <= dist_tol:
+                    logger.warning("Q_delta = {}".format(Q_delta))
+                logger.debug("Q_delta = {}".format(Q_delta))
+                if Q_delta <= tol:
+                    logger.info("Objective function converged")
+                    break
+                if self.rmse <= dist_tol:
+                    logger.info("Average distance converged")
                     break
             self.Q_old = self.Q
         else:
-            logging.warning(("Maximum iterations ({}) reached without" +
-                             " convergence, final delta_Q = {:.3e}").format(self.iteration, Q_delta))
+            logger.warning(("Maximum iterations ({}) reached without" +
+                            " convergence, final Q_old = {:.3e} Q = {:.3e} delta_Q = {:.3e}").format(self.iteration, self.Q_old, self.Q, Q_delta))
         # update p matrix once more
         self.estep()
         return self.TY
