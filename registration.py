@@ -213,16 +213,16 @@ class SimilarityCPD(BaseCPD):
     transformation model"""
     # this class is specifically designed so that it can be easily subclassed to represent
     # a rigid transformation model.
-    def calculateR():
+    def calculateR(self):
         """Calculate the estimated rotation matrix, eq. (9)"""
         U, S, VT = la.svd(self.A)
-        c = np.ones_like(s)
+        c = np.ones_like(S)
         c[-1] = la.det(U @ VT)
         C = np.diag(c)
         self.R = U @ C @ VT
         return self.R
     
-    def calculateS():
+    def calculateS(self):
         """Calculate the scale factor, Fig 2 p. 2266"""
         a = self.Yhat.T @ np.diag(self.p_old.sum(1)) @ self.Yhat
         self.s = np.trace(self.A.T @ self.R) / np.trace(a)
