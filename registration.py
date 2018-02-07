@@ -118,24 +118,23 @@ class BaseCPD(object):
         self.var /= self.Np * self.D
         # make sure self.var is positive
         if self.var < np.finfo(float).eps:
-            self.var = np.finfo(float).eps
-            logging.warning("Variance has dropped below machine precision, setting to eps")
+            # self.var = np.finfo(float).eps
+            self.var = self.tol
+            logging.warning("Variance has dropped below machine precision, setting to {}".format(self.var))
             # self.var = self.init_var = self.init_var * 2
             # self.translation = -self.Y.mean(axis=0) + self.X.mean(axis=0)
             # print("Var small resetting to", self.var)
+
+    def calc_var(self):
+        return self.dist_matrix.sum() / (self.D * self.N * self.M)
+
+    @property
+    def rmse(self):
+        # need to weight the RMSE by the probability matrix ...
+        return np.sqrt(self.p_old * self.dist_matrix).mean()
+        # return np.sqrt(((self.X - self.TY)**2).sum(1)).mean()
     
-    def update(self):
-        # expectation, maximization followed by transformation
-        self.estep()
-        self.mstep()
-        self.updateTY()
-        # now update Q to follow convergence
-        # Q_delta = np.abs((self.Q_old - self.Q) / self.Q_old)
-        Q_delta = np.abs((self.Q_old - self.Q))
-        self.Q_old = self.Q
-        return Q_delta
-    
-    def __call__(self, tol=1e-6, maxiters=1000, init_var=None, weight=0, B=None, translation=None):
+    def __call__(self, tol=1e-6, dist_tol=1e-6, maxiters=1000, init_var=None, weight=0, B=None, translation=None):
         """perform the actual registration"""
         # initialize starting transform if requested
         if translation is None:
@@ -144,32 +143,40 @@ class BaseCPD(object):
         if B is None:
             B = np.eye(self.D)
         self.B = B
+        self.tol = tol
 
         # update to the initial position
         self.updateTY()
         
         # set up initial variance
         if init_var is None:
-            init_var = self.dist_matrix.sum() / (self.D * self.N * self.M)
+            init_var = self.calc_var()
         self.var = self.init_var = init_var
         
         # initialize the weight of the uniform distribution
         assert 0 <= weight <= 1, "Weight must be between 0 and 1"
         self.w = weight
         
-        # initialize Q
-        self.Q_old = np.finfo(float).eps
-        
-        for i in range(maxiters):
-            # do iterations
-            delta_Q = self.update()
-            if delta_Q <= tol:
-                break
-            self.iteration = i
+        for self.iteration in range(maxiters):
+            # do iterations expectation, maximization followed by transformation
+            self.estep()
+            self.mstep()
+            self.updateTY()
+            if self.iteration > 0:
+                # now update Q to follow convergence
+                # we want to minimize Q so Q_old should be more positive than the new Q
+                Q_delta = np.abs(self.Q_old - self.Q) / np.abs(self.Q_old)
+                if Q_delta < 0:
+                    logging.warning("Q_delta = {}".format(Q_delta))
+                logging.debug("Q_delta = {}".format(Q_delta))
+                if Q_delta <= tol or self.rmse <= dist_tol:
+                    break
+            self.Q_old = self.Q
         else:
-            logging.warning(("Maximum iterations ({}) reached with" +
-                             " out convergence, final delta_Q = {:.3e}").format(i, delta_Q))
-
+            logging.warning(("Maximum iterations ({}) reached without" +
+                             " convergence, final delta_Q = {:.3e}").format(self.iteration, Q_delta))
+        # update p matrix once more
+        self.estep()
         return self.TY
 
 
