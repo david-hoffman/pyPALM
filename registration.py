@@ -135,8 +135,43 @@ class BaseCPD(object):
         # need to weight the RMSE by the probability matrix ...
         return np.sqrt(self.p_old * self.dist_matrix).mean()
         # return np.sqrt(((self.X - self.TY)**2).sum(1)).mean()
+
+    def calc_init_scale(self):
+        """Needs to be overloaded in child classes"""
+        raise NotImplementedError
+
+    def norm_data(self):
+        """Normalize data to mean 0 and unit variance"""
+        # calculate mean displacement
+        logger.debug("Normalizing data")
+        self.ty = self.Y.mean(0, keepdims=True)
+        self.tx = self.X.mean(0, keepdims=True)
+        # move point clouds
+        self.Y = self.Y - self.ty
+        self.X = self.X - self.tx
+        # calculate scale
+        self.calc_init_scale()
+        # apply scale
+        Sx = np.diag(self.scale_x)
+        Sy = np.diag(self.scale_y)
+        self.Y = self.Y @ Sy
+        self.X = self.X @ Sx
+
+    def unnorm_data(self):
+        """Undo the intial normalization"""
+        logger.debug("Undoing normalization")
+        Sx = np.diag(self.scale_x)
+        Sy = np.diag(self.scale_y)
+        Sx_1 = np.diag(1 / self.scale_x)
+        Sy_1 = np.diag(1 / self.scale_y)
+        # the scale matrices are diagonal so S.T == S
+        self.Y = self.Y @ Sy_1 + self.ty
+        self.X = self.X @ Sx_1 + self.tx
+        # B doesn't need to be transposed and 
+        self.B = Sx_1 @ self.B @ Sy
+        self.translation = -self.ty @ self.B.T + self.translation + self.tx
     
-    def __call__(self, tol=1e-6, dist_tol=1e-12, maxiters=1000, init_var=None, weight=0, B=None, translation=None):
+    def __call__(self, tol=1e-6, dist_tol=1e-12, maxiters=1000, init_var=None, weight=0):
         """perform the actual registration
 
         Parameters
@@ -152,16 +187,13 @@ class BaseCPD(object):
         B : ndarray (D, D)
         translation : ndarray (1, D)
         """
-        # initialize starting transform if requested
-        if translation is None:
-            translation = np.ones((1, self.D))
-        self.translation = translation
-        if B is None:
-            B = np.eye(self.D)
-        self.B = B
+        # initialize transform
+        self.translation = np.ones((1, self.D))
+        self.B = np.eye(self.D)
         self.tol = tol
 
         # update to the initial position
+        self.norm_data()
         self.updateTY()
         
         # set up initial variance
@@ -196,6 +228,8 @@ class BaseCPD(object):
             logger.warning(("Maximum iterations ({}) reached without" +
                             " convergence, final Q_old = {:.3e} Q = {:.3e} delta_Q = {:.3e}").format(self.iteration, self.Q_old, self.Q, Q_delta))
         # update p matrix once more
+        self.unnorm_data()
+        self.updateTY()
         self.estep()
         return self.TY
 
@@ -206,6 +240,12 @@ class TranslationCPD(BaseCPD):
         """Translation only means that B should be identity"""
         self.B = np.eye(self.D)
         return self.B
+
+    def calc_init_scale(self):
+        """For translation only we need to calculate a uniform scaling"""
+        anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
+        logger.debug("anisotropic scale = {}".format(anisotropic_scale))
+        self.scale_x = self.scale_y = 1 / anisotropic_scale
 
 
 class SimilarityCPD(BaseCPD):
@@ -235,12 +275,22 @@ class SimilarityCPD(BaseCPD):
         self.B = s * R
         return self.B
 
+    def calc_init_scale(self):
+        """For similarity we have isotropic scaling for each point cloud"""
+        anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
+        self.scale_x = anisotropic_scale / self.X.var()
+        self.scale_y = anisotropic_scale / self.Y.var()
+        logger.debug("scale_x = {}, scale_y = {}".format(self.scale_x, self.scale_y))
+
 
 class RigidCPD(SimilarityCPD):
     """Coherent point drift with a rigid or Euclidean (translation and rotation) transformation model"""
     def calculateS(self):
         """No scaling for this guy"""
         return 1
+
+    # for rigid we also want to avoid anything other than uniform scaling
+    calc_init_scale = TranslationCPD.calc_init_scale
 
 EuclideanCPD = RigidCPD
 
@@ -256,3 +306,8 @@ class AffineCPD(BaseCPD):
         # a is a symmetric matrix
         self.B = la.solve(a, self.A.T).T
         return self.B
+
+    def calc_init_scale(self):
+        """For affine we have anisotropic scaling for each point cloud along each dimension"""
+        self.scale_x = self.X.std(0)
+        self.scale_y = self.Y.std(0)
