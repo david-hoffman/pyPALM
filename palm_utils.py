@@ -104,5 +104,3 @@ class PALMData(object):
             raise TypeError("Data type {} is of unknown type".format(data_type))
         return df[['offset', 'amp', 'xpos', 'ypos', 'nphotons',
             'sigmax', 'sigmay', 'zpos']].hist(bins=128, figsize=(12, 12), log=True)
-
-

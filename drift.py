@@ -13,7 +13,8 @@ import tqdm
 import matplotlib.pyplot as plt
 from peaks.peakfinder import PeakFinder
 from skimage.filters import threshold_otsu
-from .display import palm_hist
+from .render import palm_hist
+
 
 def remove_xy_mean(df):
     df_new = df.astype(np.float)
@@ -95,15 +96,27 @@ def extract_fiducials(df, blobs, radius, min_num_frames=0):
     return clean_fiducials
 
 
-def plot_stats(fids_df):
+def plot_stats(fids_df, yx_pix_size=130, z_pix_size=20*1.54):
     fid, drift = calc_fiducial_stats(fids_df)
-    fid[["x0", "xdrift", "y0", "ydrift", "sigma"]] *= 130
-    fid[["z0", "zdrift"]] *= 20
+    fid[["x0", "xdrift", "y0", "ydrift", "sigma"]] *= yx_pix_size
+    drift[["x0", "y0"]] *= yx_pix_size
+    fid[["z0", "zdrift"]] *= z_pix_size
+    drift[["z0"]] *= z_pix_size
     fid.sort_values("sigma").reset_index().plot(subplots=True)
     fid.hist(bins=32)
-    drift.hist(bins=64, normed=True, layout=(3,1), figsize=(3, 9))
-#     pd.plotting.table(plt.gca(), np.round(drift.describe(), 2), loc='upper right', colWidths=[0.2, 0.2, 0.2])
-    print(drift.std() * 2 * np.sqrt(2 * np.log(2)))
+    fig, axs = plt.subplots(1, 3, figsize=(9, 3))
+    axs[0].get_shared_x_axes().join(axs[0], axs[1])
+    for ax, k in zip(axs, ("x0", "y0", "z0")):
+        d = drift[k]
+        fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
+        bins = np.linspace(-1, 1, 64) * 2 * fwhm
+        d.hist(ax=ax, bins=bins, normed=True)
+        ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
+        ax.set_yticks([])
+    axs[1].set_xlabel("Drift (nm)")
+
+    return fig, axs
+
 
 def find_fiducials(df, yx_shape, subsampling=1):
     """Find fiducials in pointilist PALM data
