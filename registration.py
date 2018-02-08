@@ -12,9 +12,72 @@ Copyright (c) 2018, David Hoffman
 import numpy as np
 import scipy.spatial.distance as distance
 import scipy.linalg as la
+from skimage.transform._geometric import _umeyama
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
+# plotting
+import matplotlib.pyplot as plt
+
+
+def estimate_translation(X, Y):
+    N, D = X.shape
+    assert (N, D) == Y.shape, "Dimension mismatch"
+    return np.eye(D), (X - Y).mean()
+
+
+def estimate_rigid(X, Y):
+    N, D = X.shape
+    assert (N, D) == Y.shape, "Dimension mismatch"
+    # the call signature for _umeyama is (src, dst)
+    # False to only estimate rotation and translation.
+    T = _umeyama(Y, X, False)
+    # T is in the usual orientation
+    B = T[:D, :D]
+    translation = T[:D, -1:].T
+    assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+    return B, translation
+
+estimate_euclidean = estimate_rigid
+
+
+def estimate_similarity(X, Y):
+    N, D = X.shape
+    assert (N, D) == Y.shape, "Dimension mismatch"
+    # the call signature for _umeyama is (src, dst)
+    # True to estimate for scale too
+    T = _umeyama(Y, X, True)
+    # T is in the usual orientation
+    B = T[:D, :D]
+    translation = T[:D, -1:].T
+    assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+    return B, translation
+
+
+def estimate_affine(X, Y):
+    """
+    self.TY = self.Y @ self.B.T + self.translation
+    
+    Parameters
+    ----------
+    X : ndarray (N, D)
+    Y : ndarray (N, D)
+    
+    Returns
+    -------
+    B : ndarray (D, D)
+    translation : ndarray (1, D)"""
+    N, D = X.shape
+    assert (N, D) == Y.shape, "Dimension mismatch"
+    aug_X = np.hstack((X, np.ones((N, 1))))
+    aug_Y = np.hstack((Y, np.ones((N, 1))))
+    # solve for matrix transforming Y to X
+    T, res, rank, s = la.lstsq(aug_Y, aug_X)
+    B = T[:D, :D].T
+    translation = T[-1:, :D]
+    assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+    
+    return B, translation
 
 
 class BaseCPD(object):
@@ -38,6 +101,28 @@ class BaseCPD(object):
         self.N, self.D = self.X.shape
         self.M, D = self.Y.shape
         assert D == self.D, "Point clouds have different dimensions"
+
+    def plot(self, only2d=False):
+        """Plot the results of the registration"""
+        if self.X.shape[-1] > 2 and not only2d:
+            projection = "3d"
+            s = slice(None, 3)
+        else:
+            projection = None
+            s = slice(None, 2)
+
+        fig = plt.figure(figsize=(8, 4))
+        ax0 = fig.add_subplot(121, projection=projection)
+        ax1 = fig.add_subplot(122)
+        ax0.scatter(*self.Y.T[s], marker=".", c="g")
+        ax0.scatter(*self.TY.T[s], marker="o", c="b")
+        ax0.scatter(*self.X.T[s], marker="x", c="r")
+        ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot='tail')
+        ax1.matshow(self.p_old)
+        ax0.set_aspect("equal")
+        ax0.set_title("RMSE = {:.3f}, i = {}\ntvec = {}".format(self.rmse, self.iteration, self.translation))
+        ax1.set_aspect("auto")
+        ax1.set_title("Num pnts = {}, numcorr = {}".format(len(self.TY), (self.p_old > self.w).sum()))
     
     def updateTY(self):
         """Update the transformed point cloud and distance matrix"""
