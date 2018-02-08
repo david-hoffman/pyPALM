@@ -12,8 +12,8 @@ Copyright (c) 2018, David Hoffman
 import numpy as np
 import scipy.spatial.distance as distance
 import scipy.linalg as la
+# get a logger
 import logging
-
 logger = logging.getLogger(__name__)
 
 
@@ -118,11 +118,12 @@ class BaseCPD(object):
         # calculate estimate of variance
         self.var = np.trace(Xhat.T @ np.diag(self.p_old.sum(0)) @ Xhat) - np.trace(A @ B.T)
         self.var /= self.Np * self.D
+        logger.debug("Variance is {}".format(self.var))
         # make sure self.var is positive
         if self.var < np.finfo(float).eps:
             # self.var = np.finfo(float).eps
             self.var = self.tol
-            logger.debug("Variance has dropped below machine precision, setting to {}".format(self.var))
+            logger.warning("Variance has dropped below machine precision, setting to {}".format(self.var))
             # self.var = self.init_var = self.init_var * 2
             # self.translation = -self.Y.mean(axis=0) + self.X.mean(axis=0)
             # print("Var small resetting to", self.var)
@@ -146,11 +147,13 @@ class BaseCPD(object):
         logger.debug("Normalizing data")
         self.ty = self.Y.mean(0, keepdims=True)
         self.tx = self.X.mean(0, keepdims=True)
+        logger.debug("tx = {}, ty = {}".format(self.tx, self.ty))
         # move point clouds
         self.Y = self.Y - self.ty
         self.X = self.X - self.tx
         # calculate scale
         self.calc_init_scale()
+        logger.debug("scale_x = {}, scale_y = {}".format(self.scale_x, self.scale_y))
         # apply scale
         Sx = np.diag(self.scale_x)
         Sy = np.diag(self.scale_y)
@@ -169,9 +172,9 @@ class BaseCPD(object):
         self.X = self.X @ Sx_1 + self.tx
         # B doesn't need to be transposed and 
         self.B = Sx_1 @ self.B @ Sy
-        self.translation = -self.ty @ self.B.T + self.translation + self.tx
+        self.translation = -self.ty @ self.B.T + self.translation @ Sx_1 + self.tx
     
-    def __call__(self, tol=1e-6, dist_tol=1e-12, maxiters=1000, init_var=None, weight=0):
+    def __call__(self, tol=1e-6, dist_tol=1e-15, maxiters=1000, init_var=None, weight=0, normalization=True):
         """perform the actual registration
 
         Parameters
@@ -193,13 +196,15 @@ class BaseCPD(object):
         self.tol = tol
 
         # update to the initial position
-        self.norm_data()
+        if normalization:
+            self.norm_data()
         self.updateTY()
         
         # set up initial variance
         if init_var is None:
             init_var = self.calc_var()
         self.var = self.init_var = init_var
+        logger.debug("self.init_var = {}".format(self.var))
         
         # initialize the weight of the uniform distribution
         assert 0 <= weight <= 1, "Weight must be between 0 and 1"
@@ -213,12 +218,12 @@ class BaseCPD(object):
             if self.iteration > 0:
                 # now update Q to follow convergence
                 # we want to minimize Q so Q_old should be more positive than the new Q
-                Q_delta = np.abs(self.Q_old - self.Q)  # / np.abs(self.Q_old)
+                Q_delta = np.abs(self.Q_old - self.Q)  #/ np.abs(self.Q_old)
                 if Q_delta < 0:
                     logger.warning("Q_delta = {}".format(Q_delta))
                 logger.debug("Q_delta = {}".format(Q_delta))
                 if Q_delta <= tol:
-                    logger.info("Objective function converged")
+                    logger.info("Objective function converged, Q_delta = {:.3e}".format(Q_delta))
                     break
                 if self.rmse <= dist_tol:
                     logger.info("Average distance converged")
@@ -226,11 +231,14 @@ class BaseCPD(object):
             self.Q_old = self.Q
         else:
             logger.warning(("Maximum iterations ({}) reached without" +
-                            " convergence, final Q_old = {:.3e} Q = {:.3e} delta_Q = {:.3e}").format(self.iteration, self.Q_old, self.Q, Q_delta))
+                            " convergence, final Q = {:.3e}").format(self.iteration, self.Q))
         # update p matrix once more
-        self.unnorm_data()
-        self.updateTY()
         self.estep()
+        # unnorm the data and apply the final transformation.
+        if normalization:
+            self.unnorm_data()
+        self.updateTY()
+
         return self.TY
 
 
@@ -244,7 +252,6 @@ class TranslationCPD(BaseCPD):
     def calc_init_scale(self):
         """For translation only we need to calculate a uniform scaling"""
         anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
-        logger.debug("anisotropic scale = {}".format(anisotropic_scale))
         self.scale_x = self.scale_y = 1 / anisotropic_scale
 
 
@@ -277,10 +284,12 @@ class SimilarityCPD(BaseCPD):
 
     def calc_init_scale(self):
         """For similarity we have isotropic scaling for each point cloud"""
+        # we can prescale by the same anisotropic scaling factor we use in
+        # TranslationCPD and then augment it by an isotropic scaling factor
+        # for each point cloud.
         anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
         self.scale_x = anisotropic_scale / self.X.var()
         self.scale_y = anisotropic_scale / self.Y.var()
-        logger.debug("scale_x = {}, scale_y = {}".format(self.scale_x, self.scale_y))
 
 
 class RigidCPD(SimilarityCPD):
@@ -309,5 +318,5 @@ class AffineCPD(BaseCPD):
 
     def calc_init_scale(self):
         """For affine we have anisotropic scaling for each point cloud along each dimension"""
-        self.scale_x = self.X.std(0)
-        self.scale_y = self.Y.std(0)
+        self.scale_x = 1 / self.X.std(0)
+        self.scale_y = 1 / self.Y.std(0)
