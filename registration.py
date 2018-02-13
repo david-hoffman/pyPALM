@@ -9,15 +9,17 @@ DOI: 10.1109/TPAMI.2010.46
 Copyright (c) 2018, David Hoffman
 """
 
+import itertools
 import numpy as np
+import scipy.spatial as spatial
 import scipy.spatial.distance as distance
 import scipy.linalg as la
 from skimage.transform._geometric import _umeyama
+# plotting
+import matplotlib.pyplot as plt
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
-# plotting
-import matplotlib.pyplot as plt
 
 
 class BaseCPD(object):
@@ -35,21 +37,45 @@ class BaseCPD(object):
         Y : ndarray (M, D)
             Moving point cloud, an M by D array of N original observations in an n-dimensional space
         """
-        self.X = X
-        self.Y = Y
+        # save an internal copy so make sure nothings being mucked with
+        self.X = self._X = X
+        self.Y = self._Y = Y
         # extract the dimensions
         self.N, self.D = self.X.shape
         self.M, D = self.Y.shape
         assert D == self.D, "Point clouds have different dimensions"
+        assert self.N, "X has no points"
+        assert self.M, "Y has no points"
+
+    def __str__(self):
+        basestr = "Model = {}, X = {},  Y = {}".format(self.__class__, self.X.shape, self.Y.shape)
+        try:
+            extrastr = ", w = {}, i = {}, Q = {}, B = {}, t = {}".format(self.w, self.iteration, self.Q, self.B, self.translation)
+        except AttributeError:
+            extrastr = ", registration not run"
+        return basestr + extrastr
 
     @property
     def matches(self):
         """return X, Y matches"""
         return np.where(self.p_old > max(self.w, np.finfo(float).eps))[::-1]
 
+    def _estimate(self):
+        """This is the actual method to overload in the child classes"""
+        raise NotImplementedError
+
     def estimate(self):
         """estimate the simple transform for matching pairs"""
-        raise NotImplementedError
+        logger.debug("Doing a simple estimation of the transformation for {}".format(self.__class__))
+        self._estimate()
+        # this assumes it's being called from a child class
+        self.updateTY()
+        # the match matrix is just the identity matrix by definition
+        self.p_old = np.eye(self.N, self.M)
+        # these need to be filled in for the ploting and str function to work
+        self.iteration = "N/A"
+        self.w = 0
+        self.Q = "N/A"
 
     def plot(self, only2d=False):
         """Plot the results of the registration"""
@@ -179,7 +205,7 @@ class BaseCPD(object):
     @property
     def rmse(self):
         # need to weight the RMSE by the probability matrix ...
-        return np.sqrt(self.p_old * self.dist_matrix).mean()
+        return np.sqrt((self.p_old * self.dist_matrix).mean())
         # return np.sqrt(((self.X - self.TY)**2).sum(1)).mean()
 
     def calc_init_scale(self):
@@ -299,10 +325,9 @@ class TranslationCPD(BaseCPD):
         anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
         self.scale_x = self.scale_y = 1 / anisotropic_scale
 
-    def estimate(self):
+    def _estimate(self):
         """Estimate the translation transform"""
         self.B, self.translation = np.eye(self.D), (self.X - self.Y).mean(0)
-        self.updateTY()
 
 
 class SimilarityCPD(BaseCPD):
@@ -343,21 +368,19 @@ class SimilarityCPD(BaseCPD):
 
     def _umeyama(self):
         """For similarity we want to have scaling"""
+        # the call signature for _umeyama is (src, dst)
+        # which is the reverse of ours
         return _umeyama(self.Y, self.X, True)
 
-    def estimate(self):
+    def _estimate(self):
         """Estimate the similarity transform"""
-        # the call signature for _umeyama is (src, dst)
-        # True to estimate for scale too
-        T = cls._umeyama(self.Y, self.X)
+        T = self._umeyama()
         D = self.D
         # T is in the usual orientation
         B = T[:D, :D]
         translation = T[:D, -1:].T
         assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
         self.B, self.translation = B, translation
-        self.updateTY()
-        self.estep()
 
 
 class RigidCPD(SimilarityCPD):
@@ -368,6 +391,8 @@ class RigidCPD(SimilarityCPD):
 
     def _umeyama(self):
         """For this class we want to have _umeyama without scaling"""
+        # the call signature for _umeyama is (src, dst)
+        # which is the reverse of ours
         return _umeyama(self.Y, self.X, False)
 
     # for rigid we also want to avoid anything other than uniform scaling
@@ -393,52 +418,182 @@ class AffineCPD(BaseCPD):
         self.scale_x = 1 / self.X.std(0)
         self.scale_y = 1 / self.Y.std(0)
 
-    def estimate(self):
-        """
-        Estimate the affine transformation for a set of corresponding points
-
-        self.TY = self.Y @ self.B.T + self.translation
-        
-        Parameters
-        ----------
-        X : ndarray (N, D)
-        Y : ndarray (N, D)
-        
-        Returns
-        -------
-        B : ndarray (D, D)
-        translation : ndarray (1, D)"""
+    def _estimate(self):
+        """Estimate the affine transformation for a set of corresponding points"""
+        # affine is quite simple, we want to solve the equation A @ Y = X
+        # or Y.T @ A.T = X.T
+        # where Y and X are augmented matrices (an extra row of ones)
+        # https://en.wikipedia.org/wiki/Affine_transformation#Augmented_matrix
         aug_X = np.hstack((self.X, np.ones((self.N, 1))))
         aug_Y = np.hstack((self.Y, np.ones((self.N, 1))))
+        # pull the dimension out
         D = self.D
         # solve for matrix transforming Y to X
         T, res, rank, s = la.lstsq(aug_Y, aug_X)
+        # remember that B = A.T (A not augmented)
         B = T[:D, :D].T
+        # we want to keep the extra dimension for translation
         translation = T[-1:, :D]
+        # make sure that the solution makes sense (last column should be 1 | 0)
         assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
         self.B, self.translation = B, translation
-        self.updateTY()
 
 
-def auto_weight(X, Y, model, resolution=0.01, crop=5, **kwargs):
-    """djfkdjslkf"""
-    ws = np.arange(0, 1, resolution)
+# a dictionary to choose models from
+model_dict = {
+    "translation": TranslationCPD,
+    "rigid": RigidCPD,
+    "euclidean": EuclideanCPD,
+    "similarity": SimilarityCPD,
+    "affine": AffineCPD
+}
+
+
+def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
+    """Automatically determine the weight to use in the CPD algorithm
+
+    Parameters
+    ----------
+    X : ndarray (N, D)
+        Fixed point cloud, an N by D array of N original observations in an n-dimensional space
+    Y : ndarray (M, D)
+        Moving point cloud, an M by D array of N original observations in an n-dimensional space
+    model : str or BaseCPD child class
+        The transformation model to use, available types are:
+            Translation
+            Rigid
+            Euclidean
+            Similarity
+            Affine
+    resolution : float
+        the resolution at which to sample the weights
+    limits : float or length 2 iterable
+        The limits of weight to search
+    kwargs : dictionary
+        key word arguments to pass to the model function when its called.
+
+    """
+    # test inputs
+    if isinstance(model, str):
+        model = model_dict[model]
+    elif not issubclass(model, BaseCPD):
+        raise ValueError("Model {} is not recognized".format(model))
+
+    try:
+        # the user has passed low and high limits
+        limit_low, limit_high = limits
+    except TypeError:
+        # the user has passed a single limit
+        limit_low = limits
+        limit_high = 1 - limits
+    # generate weights to test
+    ws = np.arange(limit_low, limit_high, resolution)
+    # container for various registrations
     regs = []
+    # iterate through weights
     for w in ws:
         kwargs.update(weight=w)
         reg = model(X, Y)
         reg(**kwargs)
         regs.append(reg)
 
+    # if the dimension of the data is less than 3 use the 1 norm
+    # else use the frobenius norm. This is a heuristic based on simulated data.
     if reg.D < 3:
         norm_type = 1
     else:
         norm_type = "fro"
+    # look at all the norms of the match matrices (The match matrix should be sparse
+    # and the norms we've chosen maximize sparsity)
     norm = np.asarray([np.linalg.norm(reg.p_old, norm_type) for reg in regs])
-
-    w = ws[norm[crop:-crop].argmax() + crop]
-    # update the model
+    # find the weight that maximizes sparsity
+    w = ws[norm.argmax()]
+    # update and run the model
     kwargs.update(weight=w)
     reg = model(X, Y)
     reg(**kwargs)
+    # return the model to the user
     return reg
+
+
+def auto_align(X_df, Y_df, model, *args, CPD_secondstep=True, **kwargs):
+    """Auto align by aligning 2D first then aligning the 3D matches"""
+    if isinstance(model, str):
+        model = model_dict[model]
+    elif not issubclass(model, BaseCPD):
+        raise ValueError("Model {} is not recognized".format(model))
+
+    s_2d = ["x0", "y0"]
+    s_3d = s_2d + ["z0"]
+    reg_2d = auto_weight(X_df[s_2d].values, Y_df[s_2d].values, model, *args, **kwargs)
+
+    xidx, yidx = reg_2d.matches
+    if not len(xidx) or not len(yidx):
+        raise RuntimeError("No matches found")
+    # is this good enought to determine one to one mapping?
+    uxidx = np.unique(xidx)
+    uyidx = np.unique(yidx)
+    if CPD_secondstep or len(xidx) != len(uxidx) or len(yidx) != len(uyidx):
+        # only use unique indices
+        reg_2d_3d = auto_weight(X_df[s_3d].values[uxidx], Y_df[s_3d].values[uyidx], model, *args, **kwargs)
+    else:
+        # use correspondences directly
+        reg_2d_3d = model(X_df[s_3d].values[xidx], Y_df[s_3d].values[yidx])
+        reg_2d_3d.estimate()
+
+    return reg_2d_3d, reg_2d
+
+
+def closest_point_matches(X, Y, method="tree", **kwargs):
+    """Keep determine the nearest neighbors in two point clouds
+
+    Parameters
+    ----------
+    X : ndarray (N, D)
+    Y : ndarray (M, D)
+
+    kwargs
+    ------
+    r : float
+        The search radius for nearest neighbors
+
+    Returns
+    -------
+    xpoints : ndarray
+        indicies of points with neighbors in x
+    ypoints : ndarray
+        indicies of points with neighbors in y
+    """
+    if method.lower() == "tree":
+        return _keepclosesttree(X, Y, **kwargs)
+    elif method.lower() == "brute":
+        return _keepclosestbrute(X, Y, **kwargs)
+    else:
+        raise ValueError("Method {} not recognized".format(method))
+
+
+def _keepclosestbrute(X, Y, r=10, percentile=None):
+    # calculate the distance matrix
+    dist_matrix = distance.cdist(X, Y)
+    # if user requests percentile
+    if percentile is not None:
+        r = np.percentile(dist_matrix, percentile * (len(X) + len(Y)) / (len(X) * len(Y)))
+    logger.debug("r = {}, fraction pairs kept = {}".format(r, (dist_matrix < r).sum() / dist_matrix.size))
+    result = [np.unique(a) for a in np.where(dist_matrix < r)]
+    # log percentages
+    logger.debug("percentage x kept = {}, y kept = {}".format(*[len(a) / len(aa) for a, aa in zip(result, (X, Y))]))
+    return result
+
+
+def _keepclosesttree(X, Y, r=10):
+    # build the trees
+    xtree = spatial.cKDTree(X)
+    ytree = spatial.cKDTree(Y)
+    # find neighbors within radius r
+    l = xtree.query_ball_tree(ytree, r)
+    # extract from matches, without duplicates
+    ypoints = np.unique(list(itertools.chain.from_iterable(l)))
+    xpoints = np.unique([i for i, ll in enumerate(l) if len(ll)])
+    logger.debug("percentage x kept = {}, y kept = {}".format(len(xpoints) / len(X), len(ypoints) / len(Y)))
+
+    return xpoints, ypoints
