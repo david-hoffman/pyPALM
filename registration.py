@@ -20,66 +20,6 @@ logger = logging.getLogger(__name__)
 import matplotlib.pyplot as plt
 
 
-def estimate_translation(X, Y):
-    N, D = X.shape
-    assert (N, D) == Y.shape, "Dimension mismatch"
-    return np.eye(D), (X - Y).mean()
-
-
-def estimate_rigid(X, Y):
-    N, D = X.shape
-    assert (N, D) == Y.shape, "Dimension mismatch"
-    # the call signature for _umeyama is (src, dst)
-    # False to only estimate rotation and translation.
-    T = _umeyama(Y, X, False)
-    # T is in the usual orientation
-    B = T[:D, :D]
-    translation = T[:D, -1:].T
-    assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
-    return B, translation
-
-estimate_euclidean = estimate_rigid
-
-
-def estimate_similarity(X, Y):
-    N, D = X.shape
-    assert (N, D) == Y.shape, "Dimension mismatch"
-    # the call signature for _umeyama is (src, dst)
-    # True to estimate for scale too
-    T = _umeyama(Y, X, True)
-    # T is in the usual orientation
-    B = T[:D, :D]
-    translation = T[:D, -1:].T
-    assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
-    return B, translation
-
-
-def estimate_affine(X, Y):
-    """
-    self.TY = self.Y @ self.B.T + self.translation
-    
-    Parameters
-    ----------
-    X : ndarray (N, D)
-    Y : ndarray (N, D)
-    
-    Returns
-    -------
-    B : ndarray (D, D)
-    translation : ndarray (1, D)"""
-    N, D = X.shape
-    assert (N, D) == Y.shape, "Dimension mismatch"
-    aug_X = np.hstack((X, np.ones((N, 1))))
-    aug_Y = np.hstack((Y, np.ones((N, 1))))
-    # solve for matrix transforming Y to X
-    T, res, rank, s = la.lstsq(aug_Y, aug_X)
-    B = T[:D, :D].T
-    translation = T[-1:, :D]
-    assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
-    
-    return B, translation
-
-
 class BaseCPD(object):
     """Base class for the coherent point drift algorithm based on:
     Myronenko and Xubo Song - 2010 - Point Set Registration Coherent Point Drift
@@ -102,27 +42,44 @@ class BaseCPD(object):
         self.M, D = self.Y.shape
         assert D == self.D, "Point clouds have different dimensions"
 
+    @property
+    def matches(self):
+        """return X, Y matches"""
+        return np.where(self.p_old > max(self.w, np.finfo(float).eps))[::-1]
+
+    def estimate(self):
+        """estimate the simple transform for matching pairs"""
+        raise NotImplementedError
+
     def plot(self, only2d=False):
         """Plot the results of the registration"""
-        if self.X.shape[-1] > 2 and not only2d:
-            projection = "3d"
-            s = slice(None, 3)
-        else:
-            projection = None
-            s = slice(None, 2)
+        if self.X.shape[-1] > 1:
+            if self.X.shape[-1] > 2 and not only2d:
+                projection = "3d"
+                s = slice(None, 3)
+            else:
+                projection = None
+                s = slice(None, 2)
 
-        fig = plt.figure(figsize=(8, 4))
-        ax0 = fig.add_subplot(121, projection=projection)
-        ax1 = fig.add_subplot(122)
-        ax0.scatter(*self.Y.T[s], marker=".", c="g")
-        ax0.scatter(*self.TY.T[s], marker="o", c="b")
-        ax0.scatter(*self.X.T[s], marker="x", c="r")
-        ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot='tail')
+            fig = plt.figure(figsize=(8, 4))
+            ax0 = fig.add_subplot(121, projection=projection)
+            ax1 = fig.add_subplot(122)
+            axs = (ax0, ax1)
+            
+            ax0.scatter(*self.Y.T[s], marker=".", c="g")
+            ax0.scatter(*self.TY.T[s], marker="o", c="b")
+            ax0.scatter(*self.X.T[s], marker="x", c="r")
+            ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot='tail')
+            ax0.set_aspect("equal")
+            ax0.set_title("RMSE = {:.3f}, i = {}\ntvec = {}".format(self.rmse, self.iteration, self.translation))
+        else:
+            fig, ax1 = plt.subplots(1)
+            axs = (ax1, )
         ax1.matshow(self.p_old)
-        ax0.set_aspect("equal")
-        ax0.set_title("RMSE = {:.3f}, i = {}\ntvec = {}".format(self.rmse, self.iteration, self.translation))
+        
         ax1.set_aspect("auto")
         ax1.set_title("Num pnts = {}, numcorr = {}".format(len(self.TY), (self.p_old > self.w).sum()))
+        return fig, axs
     
     def updateTY(self):
         """Update the transformed point cloud and distance matrix"""
@@ -165,6 +122,9 @@ class BaseCPD(object):
             logger.debug("P_mat is null, resetting to uniform probabilities")
             p_old = np.ones_like(p_mat) / self.M
         else:
+            if c < np.finfo(float).eps:
+                logger.debug("c is small, setting to eps")
+                c = np.finfo(float).eps
             p_old = p_mat / (denominator + c)
         # compute Np, make sure it's neither zero nor more than N
         self.Np = min(self.N, max(p_old.sum(), np.finfo(float).eps))
@@ -259,7 +219,7 @@ class BaseCPD(object):
         self.B = Sx_1 @ self.B @ Sy
         self.translation = -self.ty @ self.B.T + self.translation @ Sx_1 + self.tx
     
-    def __call__(self, tol=1e-6, dist_tol=1e-15, maxiters=1000, init_var=None, weight=0, normalization=True):
+    def __call__(self, tol=1e-6, dist_tol=0, maxiters=1000, init_var=None, weight=0, normalization=True):
         """perform the actual registration
 
         Parameters
@@ -292,7 +252,7 @@ class BaseCPD(object):
         logger.debug("self.init_var = {}".format(self.var))
         
         # initialize the weight of the uniform distribution
-        assert 0 <= weight <= 1, "Weight must be between 0 and 1"
+        assert 0 <= weight < 1, "Weight must be between 0 and 1"
         self.w = weight
         
         for self.iteration in range(maxiters):
@@ -339,6 +299,11 @@ class TranslationCPD(BaseCPD):
         anisotropic_scale = np.concatenate((self.X, self.Y)).std(0)
         self.scale_x = self.scale_y = 1 / anisotropic_scale
 
+    def estimate(self):
+        """Estimate the translation transform"""
+        self.B, self.translation = np.eye(self.D), (self.X - self.Y).mean(0)
+        self.updateTY()
+
 
 class SimilarityCPD(BaseCPD):
     """Coherent point drift with a similarity (translation, rotation and isotropic scaling)
@@ -376,12 +341,34 @@ class SimilarityCPD(BaseCPD):
         self.scale_x = anisotropic_scale / self.X.var()
         self.scale_y = anisotropic_scale / self.Y.var()
 
+    def _umeyama(self):
+        """For similarity we want to have scaling"""
+        return _umeyama(self.Y, self.X, True)
+
+    def estimate(self):
+        """Estimate the similarity transform"""
+        # the call signature for _umeyama is (src, dst)
+        # True to estimate for scale too
+        T = cls._umeyama(self.Y, self.X)
+        D = self.D
+        # T is in the usual orientation
+        B = T[:D, :D]
+        translation = T[:D, -1:].T
+        assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+        self.B, self.translation = B, translation
+        self.updateTY()
+        self.estep()
+
 
 class RigidCPD(SimilarityCPD):
     """Coherent point drift with a rigid or Euclidean (translation and rotation) transformation model"""
     def calculateS(self):
         """No scaling for this guy"""
         return 1
+
+    def _umeyama(self):
+        """For this class we want to have _umeyama without scaling"""
+        return _umeyama(self.Y, self.X, False)
 
     # for rigid we also want to avoid anything other than uniform scaling
     calc_init_scale = TranslationCPD.calc_init_scale
@@ -405,3 +392,53 @@ class AffineCPD(BaseCPD):
         """For affine we have anisotropic scaling for each point cloud along each dimension"""
         self.scale_x = 1 / self.X.std(0)
         self.scale_y = 1 / self.Y.std(0)
+
+    def estimate(self):
+        """
+        Estimate the affine transformation for a set of corresponding points
+
+        self.TY = self.Y @ self.B.T + self.translation
+        
+        Parameters
+        ----------
+        X : ndarray (N, D)
+        Y : ndarray (N, D)
+        
+        Returns
+        -------
+        B : ndarray (D, D)
+        translation : ndarray (1, D)"""
+        aug_X = np.hstack((self.X, np.ones((self.N, 1))))
+        aug_Y = np.hstack((self.Y, np.ones((self.N, 1))))
+        D = self.D
+        # solve for matrix transforming Y to X
+        T, res, rank, s = la.lstsq(aug_Y, aug_X)
+        B = T[:D, :D].T
+        translation = T[-1:, :D]
+        assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+        self.B, self.translation = B, translation
+        self.updateTY()
+
+
+def auto_weight(X, Y, model, resolution=0.01, crop=5, **kwargs):
+    """djfkdjslkf"""
+    ws = np.arange(0, 1, resolution)
+    regs = []
+    for w in ws:
+        kwargs.update(weight=w)
+        reg = model(X, Y)
+        reg(**kwargs)
+        regs.append(reg)
+
+    if reg.D < 3:
+        norm_type = 1
+    else:
+        norm_type = "fro"
+    norm = np.asarray([np.linalg.norm(reg.p_old, norm_type) for reg in regs])
+
+    w = ws[norm[crop:-crop].argmax() + crop]
+    # update the model
+    kwargs.update(weight=w)
+    reg = model(X, Y)
+    reg(**kwargs)
+    return reg
