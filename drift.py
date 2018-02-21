@@ -103,7 +103,7 @@ def extract_fiducials(df, blobs, radius, min_num_frames=0):
         for y, x in tqdm.tqdm_notebook(blobs, leave=False, desc="Extracting Fiducials")]
     # remove any duplicates in a given frame by only keeping the localization with the largest count
     clean_fiducials = [sub_df.sort_values('amp', ascending=False).groupby('frame').first()
-                       for sub_df in fiducials_dfs if len(sub_df) > min_num_frames]
+                       for sub_df in fiducials_dfs]
     return clean_fiducials
 
 
