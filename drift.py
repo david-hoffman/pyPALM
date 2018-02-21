@@ -94,13 +94,17 @@ def calc_fiducial_stats(fid_df_list):
     return fid_stats, all_drift
 
 
-def extract_fiducials(df, blobs, radius, min_num_frames=0):
+def extract_fiducials(df, blobs, radius, diagnostics=False):
     """Do the actual filtering
     
     We're doing it sequentially because we may run out of memory.
     If initial DataFrame is 18 GB (1 GB per column) and we have 200 """
+    if diagnostics:
+        pipe = None
+    else:
+        pipe = io.StringIO()
     fiducials_dfs = [df[np.sqrt((df.x0 - x) ** 2 + (df.y0 - y) ** 2) < radius]
-        for y, x in tqdm.tqdm_notebook(blobs, leave=False, desc="Extracting Fiducials")]
+        for y, x in tqdm.tqdm(blobs, leave=False, desc="Extracting Fiducials", file=pipe)]
     # remove any duplicates in a given frame by only keeping the localization with the largest count
     clean_fiducials = [sub_df.sort_values('amp', ascending=False).groupby('frame').first()
                        for sub_df in fiducials_dfs]
