@@ -15,11 +15,12 @@ from peaks.peakfinder import PeakFinder
 from skimage.filters import threshold_otsu
 from .render import palm_hist
 
+coords = ["z0", "y0", "x0"]
 
 def remove_xy_mean(df):
     df_new = df.astype(np.float)
-    xyz_mean = df_new[["z0", "y0", "x0"]].mean()
-    df_new[["z0", "y0", "x0"]] -= xyz_mean
+    xyz_mean = df_new[coords].mean()
+    df_new[coords] -= xyz_mean
     return df_new
 
 
@@ -76,7 +77,7 @@ def remove_drift(df_data, drift):
     # this also, conveniently, makes a copy of the data
     df_data_dc = df_data.set_index("frame")
     # subtract drift only (assumes that drift only has these keys)
-    df_data_dc[["x0", "y0", "z0"]] -= drift
+    df_data_dc[coords] -= drift
     # return the data frame with the index reset so that all localizations have
     # a unique id
     return df_data_dc.reset_index()
@@ -85,9 +86,9 @@ def remove_drift(df_data, drift):
 def calc_fiducial_stats(fid_df_list):
     """Calculate various stats"""
     fwhm = lambda x: x.std() * (2 * np.sqrt(2 * np.log(2)))
-    fid_stats = pd.DataFrame([f[["x0", "y0","z0", "amp"]].mean() for f in fid_df_list])
-    fid_stats[["xdrift", "ydrift", "zdrift"]] = pd.DataFrame([f.agg({"x0":fwhm,"y0":fwhm, "z0":fwhm}) for
-                                                    f in fid_df_list])[["x0","y0", "z0"]]
+    fid_stats = pd.DataFrame([f[coords + ["amp"]].mean() for f in fid_df_list])
+    fid_stats[[c[0] + "drift" for c in coords]] = pd.DataFrame([f.agg({c:fwhm for c in coords}) for
+                                                    f in fid_df_list])[coords]
     fid_stats["sigma"] = np.sqrt(fid_stats.ydrift**2 + fid_stats.xdrift**2)
     all_drift = pd.concat([f[["x0","y0", "z0"]] - f[["x0","y0", "z0"]].mean() for f in fid_df_list])
     return fid_stats, all_drift
@@ -106,29 +107,7 @@ def extract_fiducials(df, blobs, radius, min_num_frames=0):
     return clean_fiducials
 
 
-def plot_stats(fids_df, yx_pix_size=130, z_pix_size=20*1.54):
-    fid, drift = calc_fiducial_stats(fids_df)
-    fid[["x0", "xdrift", "y0", "ydrift", "sigma"]] *= yx_pix_size
-    drift[["x0", "y0"]] *= yx_pix_size
-    fid[["z0", "zdrift"]] *= z_pix_size
-    drift[["z0"]] *= z_pix_size
-    fid.sort_values("sigma").reset_index().plot(subplots=True)
-    fid.hist(bins=32)
-    fig, axs = plt.subplots(1, 3, figsize=(9, 3))
-    axs[0].get_shared_x_axes().join(axs[0], axs[1])
-    for ax, k in zip(axs, ("x0", "y0", "z0")):
-        d = drift[k]
-        fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
-        bins = np.linspace(-1, 1, 64) * 2 * fwhm
-        d.hist(ax=ax, bins=bins, normed=True)
-        ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
-        ax.set_yticks([])
-    axs[1].set_xlabel("Drift (nm)")
-
-    return fig, axs
-
-
-def find_fiducials(df, yx_shape, subsampling=1):
+def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, threshold=0, blob_thresh=None, **kwargs):
     """Find fiducials in pointilist PALM data
     
     The key here is to realize that there should be on fiducial per frame"""
