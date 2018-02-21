@@ -23,38 +23,48 @@ def remove_xy_mean(df):
     return df_new
 
 
-def calc_drift(fiducials_df, weighted="amp", diagnostics=False):
+def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=None):
     """Given a list of DataFrames with each DF containing the coordinates
     of a single fiducial calculate the mean or weighted mean of the coordinates
     in each frame."""
     if len(fiducials_df) == 1:
         # if there is only one fiducial then return that
-        return remove_xy_mean(fiducials_df[0])
-    mean_removed = [remove_xy_mean(ff) for ff in fiducials_df]
-    if diagnostics:
-        # debugging diagnostics
-        fig, (ax0, ax1) = plt.subplots(1, 2)
-        for ff in mean_removed:
-            ff.x0.plot(ax=ax0)
-            ff.y0.plot(ax=ax1)
-            
-    # want to do a weighted average
-    # need to reset_index after concatination so that all localzations have unique ID
-    # this will make weighting easier down the line.
-    df_means = pd.concat(mean_removed).reset_index()
-
-    # if weighted is something, use that as the weights for the mean
-    # if weighted is not a valid column name then it will raise an
-    # exception
-    if weighted:
-        # weight the coordinates
-        df_means[["x0", "y0", "z0"]] = df_means[["x0", "y0", "z0"]].mul(df_means[weighted], "index")
-        # groupby frame
-        temp = df_means.groupby("frame")
-        # calc weighted average
-        return temp[["x0", "y0", "z0"]].sum().div(temp[weighted].sum(), "index")
+        logger.debug("Only on fiducial passed to calc_drift")
+        toreturn = remove_xy_mean(fiducials_df[0])[coords]
     else:
-        return df_means.groupby("frame")[["x0", "y0", "z0"]].mean()
+        mean_removed = [remove_xy_mean(ff) for ff in fiducials_df]
+        if diagnostics:
+            # debugging diagnostics
+            fig, (ax0, ax1) = plt.subplots(1, 2)
+            for ff in mean_removed:
+                ff.x0.plot(ax=ax0)
+                ff.y0.plot(ax=ax1)
+                
+        # want to do a weighted average
+        # need to reset_index after concatination so that all localzations have unique ID
+        # this will make weighting easier down the line.
+        df_means = pd.concat(mean_removed).reset_index()
+
+        # if weighted is something, use that as the weights for the mean
+        # if weighted is not a valid column name then it will raise an
+        # exception
+        if weighted:
+            # weight the coordinates
+            logger.debug("Weighting by {}".format(weighted))
+            df_means[coords] = df_means[coords].mul(df_means[weighted], "index")
+            # groupby frame
+            temp = df_means.groupby("frame")
+            # calc weighted average
+            toreturn = temp[coords].sum().div(temp[weighted].sum(), "index")
+        else:
+            toreturn = df_means.groupby("frame")[coords].mean()
+
+    if frames_index is None:
+        return toreturn
+    else:
+        return toreturn.reindex(frames_index).interpolate(limit_direction="both")
+
+
 
 
 def remove_drift(df_data, drift):
