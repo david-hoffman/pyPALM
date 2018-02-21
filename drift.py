@@ -83,14 +83,30 @@ def remove_drift(df_data, drift):
     return df_data_dc.reset_index()
 
 
-def calc_fiducial_stats(fid_df_list):
+def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_size=1):
     """Calculate various stats"""
     fwhm = lambda x: x.std() * (2 * np.sqrt(2 * np.log(2)))
     fid_stats = pd.DataFrame([f[coords + ["amp"]].mean() for f in fid_df_list])
     fid_stats[[c[0] + "drift" for c in coords]] = pd.DataFrame([f.agg({c:fwhm for c in coords}) for
                                                     f in fid_df_list])[coords]
     fid_stats["sigma"] = np.sqrt(fid_stats.ydrift**2 + fid_stats.xdrift**2)
-    all_drift = pd.concat([f[["x0","y0", "z0"]] - f[["x0","y0", "z0"]].mean() for f in fid_df_list])
+    all_drift = pd.concat([f[coords] - f[coords].mean() for f in fid_df_list])
+    if diagnostics:
+        fid2plot = fid_stats[["x0", "xdrift", "y0", "ydrift", "sigma"]] * yx_pix_size
+        fid2plot = pd.concat((fid2plot, fid_stats[["z0", "zdrift"]] * z_pix_size), 1)
+        drift2plot = all_drift[coords] * (z_pix_size, yx_pix_size, yx_pix_size)
+        fid2plot.sort_values("sigma").reset_index().plot(subplots=True)
+        fid2plot.hist(bins=32)
+        fig, axs = plt.subplots(1, 3, figsize=(9, 3))
+        axs[0].get_shared_x_axes().join(axs[0], axs[1])
+        for ax, k in zip(axs, ("x0", "y0", "z0")):
+            d = drift2plot[k]
+            fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
+            bins = np.linspace(-1, 1, 64) * 2 * fwhm
+            d.hist(ax=ax, bins=bins, normed=True)
+            ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
+            ax.set_yticks([])
+        axs[1].set_xlabel("Drift (nm)")
     return fid_stats, all_drift
 
 
