@@ -141,6 +141,7 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     hist_2d = palm_hist(df, yx_shape, subsampling)
     pf = PeakFinder(hist_2d.astype(int), 1 / subsampling)
     # no blobs found so try again with a lower threshold
+    pf.thresh = threshold
     if sigmas is not None:
         try:
             # see if the user passed more than one value
@@ -148,11 +149,11 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
             # flip them if necessary
             if smin > smax:
                 smin, smax = smax, smin
+            pf.find_blobs(min_sigma=smin, max_sigma=smax)
         except TypeError:
             # only one value
             pf.blob_sigma = sigmas
-    pf.thresh = threshold
-    pf.find_blobs()
+            pf.find_blobs()
     pf.prune_blobs(10 / subsampling)
     # need to recalculate the "amplitude" in a more inteligent way for
     # these types of data, in this case we want to take the sum over a small box
