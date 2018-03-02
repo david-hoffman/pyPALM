@@ -7,6 +7,7 @@ All code related to visualization of PALM data
 Copyright (c) 2017, David Hoffman
 """
 
+import gc
 import json
 import os
 import numpy as np
@@ -33,7 +34,7 @@ greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in ra
 def choose_dtype(max_value):
     """choose the appropriate dtype for saving images"""
     # if any type of float, use float32
-    if np.issubdtype(np.inexact, max_value):
+    if np.issubdtype(max_value, np.inexact):
         return np.float32
     # check for integers now
     if max_value < 2**8:
@@ -622,7 +623,10 @@ def _gen_zplane(yx_shape, df, zplane, mag, diffraction_limit):
     # calculate the amplitude of the z gaussian.
     amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (np.sqrt(2 * np.pi) * df_zplane.sigma_z)
     # generate a 2D image weighted by the z gaussian.
-    return _jit_gen_img_sub(yx_shape, df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values, mag, amps.values, diffraction_limit)
+    toreturn = _jit_gen_img_sub(yx_shape, df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values, mag, amps.values, diffraction_limit)
+    # remove all temporaries
+    gc.collect()
+    return toreturn
 
 
 def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit):
