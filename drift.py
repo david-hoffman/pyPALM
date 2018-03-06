@@ -81,7 +81,7 @@ def remove_drift(df_data, drift):
     # make our index frame number so that when we subtract drift it aligns automatically along
     # the index, this needs to be tested.
     # this also, conveniently, makes a copy of the data
-    df_data_dc = df_data.set_index("frame")
+    df_data_dc = df_data.set_index("frame", append=True)
     # subtract drift only (assumes that drift only has these keys)
     df_data_dc[coords] -= drift
     # return the data frame with the index reset so that all localizations have
@@ -129,10 +129,19 @@ def extract_fiducials(df, blobs, radius, diagnostics=False):
         pipe = io.StringIO()
     fiducials_dfs = [df[np.sqrt((df.x0 - x) ** 2 + (df.y0 - y) ** 2) < radius]
         for y, x in tqdm.tqdm(blobs, leave=False, desc="Extracting Fiducials", file=pipe)]
+    
+    return fiducials_dfs
+
+
+def clean_fiducials(fiducials_df, order="amp"):
+    """Clean up fiducials after an inital round of `extract_fiducials`"""
     # remove any duplicates in a given frame by only keeping the localization with the largest count
-    clean_fiducials = [sub_df.sort_values('amp', ascending=False).groupby('frame').first()
+    # should clean up with ptest.amp/ptest.offset/ptest.sigma_z
+    # can add column and use that instead
+    # fiducials_dfs = [f.assign(fom = lambda df : df.amp / df.offset / df.sigma_z) for f in fiducials_dfs]
+    # could put the refine by centroid step here.
+    clean_fiducials = [sub_df.sort_values(order, ascending=False).groupby('frame').first()
                        for sub_df in fiducials_dfs]
-    return clean_fiducials
 
 
 def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, threshold=0, blob_thresh=None, **kwargs):
@@ -145,6 +154,7 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     pf = PeakFinder(hist_2d.astype(int), 1 / subsampling)
     # no blobs found so try again with a lower threshold
     pf.thresh = threshold
+    bkwargs = dict()
     if sigmas is not None:
         try:
             # see if the user passed more than one value
@@ -152,11 +162,11 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
             # flip them if necessary
             if smin > smax:
                 smin, smax = smax, smin
-            pf.find_blobs(min_sigma=smin, max_sigma=smax)
+            bkwargs = dict(min_sigma=smin, max_sigma=smax)
         except TypeError:
             # only one value
             pf.blob_sigma = sigmas
-            pf.find_blobs()
+    pf.find_blobs(**bkwargs)
     pf.prune_blobs(10 / subsampling)
     # need to recalculate the "amplitude" in a more inteligent way for
     # these types of data, in this case we want to take the sum over a small box
@@ -164,10 +174,11 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),)*2)].sum() for y, x, s, a in pf.blobs])
     pf._blobs[:, 3] = amps
     if blob_thresh is None:
-        blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10)
+        blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10 * subsampling)
     pf.blobs = pf.blobs[pf.blobs[:, 3] > blob_thresh]
     if diagnostics:
         pf.plot_blobs(**kwargs)
+        pf.plot_blob_grid(window=int(7 / subsampling))
     if not pf.blobs.size:
         # still no blobs then raise error
         raise RuntimeError("No blobs found!")
