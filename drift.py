@@ -41,11 +41,11 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
         mean_removed = [remove_xy_mean(ff) for ff in fiducials_df]
         if diagnostics:
             # debugging diagnostics
-            fig, (ax0, ax1) = plt.subplots(1, 2)
+            fig, axs = plt.subplots(3)
             for ff in mean_removed:
-                ff.x0.plot(ax=ax0)
-                ff.y0.plot(ax=ax1)
-                
+                for coord, ax in zip(coords, axs.ravel()):
+                    ff[coord].plot(ax=ax)
+
         # want to do a weighted average
         # need to reset_index after concatination so that all localzations have unique ID
         # this will make weighting easier down the line.
@@ -65,6 +65,8 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
         else:
             toreturn = df_means.groupby("frame")[coords].mean()
 
+    if diagnostics:
+        toreturn.plot(subplots=True)
     if frames_index is None:
         return toreturn
     else:
