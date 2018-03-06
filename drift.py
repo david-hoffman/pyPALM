@@ -26,7 +26,7 @@ def remove_xy_mean(df):
     df_new = df.astype(np.float)
     xyz_mean = df_new[coords].mean()
     df_new[coords] -= xyz_mean
-    return df_new
+    return df_new.dropna()
 
 
 def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=None):
@@ -49,7 +49,7 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
         # want to do a weighted average
         # need to reset_index after concatination so that all localzations have unique ID
         # this will make weighting easier down the line.
-        df_means = pd.concat(mean_removed).reset_index()
+        df_means = pd.concat(mean_removed).dropna().reset_index()
 
         # if weighted is something, use that as the weights for the mean
         # if weighted is not a valid column name then it will raise an
