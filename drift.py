@@ -70,9 +70,8 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
     if frames_index is None:
         return toreturn
     else:
+        assert frames_index.name == "frame"
         return toreturn.reindex(frames_index).interpolate(limit_direction="both")
-
-
 
 
 def remove_drift(df_data, drift):
@@ -87,7 +86,9 @@ def remove_drift(df_data, drift):
     df_data_dc[coords] -= drift
     # return the data frame with the index reset so that all localizations have
     # a unique id
-    return df_data_dc.reset_index()
+    # df_data_dc.reset_index("frame", inplace=True)
+    # return df_data_dc
+    return df_data_dc.reset_index("frame")
 
 
 def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_size=1):
