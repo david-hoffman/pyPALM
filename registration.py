@@ -17,6 +17,7 @@ import scipy.linalg as la
 from skimage.transform._geometric import _umeyama
 # plotting
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
@@ -58,7 +59,7 @@ class BaseCPD(object):
     @property
     def matches(self):
         """return X, Y matches"""
-        return np.where(self.p_old > max(self.w, np.finfo(float).eps))[::-1]
+        return np.where(self.p_old > max(min(self.w,0.9), np.finfo(float).eps))[::-1]
 
     def _estimate(self):
         """This is the actual method to overload in the child classes"""
@@ -475,7 +476,7 @@ def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
     """
     # test inputs
     if isinstance(model, str):
-        model = model_dict[model]
+        model = model_dict[model.lower()]
     elif not issubclass(model, BaseCPD):
         raise ValueError("Model {} is not recognized".format(model))
 
@@ -519,19 +520,21 @@ def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
 def auto_align(X_df, Y_df, model, *args, CPD_secondstep=True, keepclosest=None, **kwargs):
     """Auto align by aligning 2D first then aligning the 3D matches"""
     if isinstance(model, str):
-        model = model_dict[model]
+        model = model_dict[model.lower()]
     elif not issubclass(model, BaseCPD):
         raise ValueError("Model {} is not recognized".format(model))
 
     s_2d = ["x0", "y0"]
     s_3d = s_2d + ["z0"]
     reg_2d = auto_weight(X_df[s_2d].values, Y_df[s_2d].values, model, *args, **kwargs)
-
+    print(reg_2d.w)
+    reg_2d.plot()
     if keepclosest is None:
         xidx, yidx = reg_2d.matches
     else:
         xidx, yidx = closest_point_matches(reg_2d.X, reg_2d.TY, r=keepclosest)
     if not len(xidx) or not len(yidx):
+        print(xidx, yidx)
         raise RuntimeError("No matches found")
     # is this good enought to determine one to one mapping?
     uxidx = np.unique(xidx)
@@ -541,6 +544,7 @@ def auto_align(X_df, Y_df, model, *args, CPD_secondstep=True, keepclosest=None, 
         reg_2d_3d = auto_weight(X_df[s_3d].values[uxidx], Y_df[s_3d].values[uyidx], model, *args, **kwargs)
     else:
         # use correspondences directly
+        print("estimating")
         reg_2d_3d = model(X_df[s_3d].values[xidx], Y_df[s_3d].values[yidx])
         reg_2d_3d.estimate()
 
@@ -594,9 +598,15 @@ def _keepclosesttree(X, Y, r=10):
     ytree = spatial.cKDTree(Y)
     # find neighbors within radius r
     l = xtree.query_ball_tree(ytree, r)
-    # extract from matches, without duplicates
-    ypoints = np.unique(list(itertools.chain.from_iterable(l)))
-    xpoints = np.unique([i for i, ll in enumerate(l) if len(ll)])
+    # extract from matches
+    ypoints = np.array(list(itertools.chain.from_iterable(l)))
+    xpoints = np.array([i for i, ll in enumerate(l) if len(ll)])
+    # check for duplicate indexs
+    uypoints = np.unique(ypoints)
+    uxpoints = np.unique(xpoints)
+    if uxpoints.size < xpoints.size or uypoints.size < ypoints.size:
+        logger.debug("taking unique points")
+        xpoints, ypoints = uxpoints, uypoints
     logger.debug("percentage x kept = {}, y kept = {}".format(len(xpoints) / len(X), len(ypoints) / len(Y)))
 
     return xpoints, ypoints
