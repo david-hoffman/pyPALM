@@ -22,6 +22,117 @@ logger = logging.getLogger(__name__)
 
 coords = ["z0", "y0", "x0"]
 
+
+def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, threshold=0, blob_thresh=None, **kwargs):
+    """Find fiducials in pointilist PALM data
+    
+    The key here is to realize that there should be on fiducial per frame"""
+    # incase we subsample the frame number
+    num_frames = df.frame.max() - df.frame.min()
+    hist_2d = palm_hist(df, yx_shape, subsampling)
+    pf = PeakFinder(hist_2d.astype(int), 1 / subsampling)
+    # no blobs found so try again with a lower threshold
+    pf.thresh = threshold
+    bkwargs = dict()
+    if sigmas is not None:
+        try:
+            # see if the user passed more than one value
+            smin, smax = sigmas
+            # flip them if necessary
+            if smin > smax:
+                smin, smax = smax, smin
+            bkwargs = dict(min_sigma=smin, max_sigma=smax)
+        except TypeError:
+            # only one value
+            pf.blob_sigma = sigmas
+    pf.find_blobs(**bkwargs)
+    pf.prune_blobs(10 / subsampling)
+    # need to recalculate the "amplitude" in a more inteligent way for
+    # these types of data, in this case we want to take the sum over a small box
+    # area
+    amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),) * 2)].sum() for y, x, s, a in pf.blobs])
+    pf._blobs[:, 3] = amps
+    if blob_thresh is None:
+        blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10 * subsampling)
+    pf.blobs = pf.blobs[pf.blobs[:, 3] > blob_thresh]
+    if diagnostics:
+        pf.plot_blobs(**kwargs)
+        pf.plot_blob_grid(window=int(7 / subsampling), **kwargs)
+    if not pf.blobs.size:
+        # still no blobs then raise error
+        raise RuntimeError("No blobs found!")
+    if pf.blobs[:, 3].max() < num_frames * subsampling / 2:
+        logger.warn("Drift maybe too high to find fiducials")
+    # correct positions for subsampling
+    return pf.blobs[:, :2] * subsampling
+
+
+def extract_fiducials(df, blobs, radius, diagnostics=False):
+    """Do the actual filtering
+    
+    We're doing it sequentially because we may run out of memory.
+    If initial DataFrame is 18 GB (1 GB per column) and we have 200 """
+    if diagnostics:
+        pipe = None
+    else:
+        pipe = io.StringIO()
+    fiducials_dfs = [df[np.sqrt((df.x0 - x) ** 2 + (df.y0 - y) ** 2) < radius]
+                     for y, x in tqdm.tqdm(blobs, leave=False, desc="Extracting Fiducials", file=pipe)]
+    return fiducials_dfs
+
+
+def clean_fiducials(fiducials_dfs, order="amp", ascending=False, radius=None):
+    """Clean up fiducials after an inital round of `extract_fiducials`
+
+    will choose the fiducial with the largest (ascending=False), or smallest (ascending=True)
+    value of `order`
+
+    If radius is specified the fiducials will be filtered around the mean x, y position in a circle
+    of radius radius."""
+    if radius is not None:
+        # not using z to our advantage here ...
+        # the main use for this section is to clean up outliers after an initial pass with extract_fiducials
+        fiducials_dfs = [df[np.sqrt(((df[["x0", "y0"]] - df[["x0", "y0"]].mean())**2).sum(1)) < radius]
+                         for df in fiducials_dfs]
+    # order fiducials in each frame by the chosen value and direction, and take the first value
+    # i.e. take smallest or largest
+    clean_fiducials = [sub_df.sort_values(order, ascending=ascending).groupby('frame').first()
+                       for sub_df in fiducials_dfs]
+    return clean_fiducials
+
+
+def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_size=1):
+    """Calculate various stats"""
+    
+    def fwhm(x):
+        """Return the FWHM of an assumed normal distribution"""
+        return x.std() * (2 * np.sqrt(2 * np.log(2)))
+    
+    # keep coordinates and amplitude
+    fid_stats = pd.DataFrame([f[coords + ["amp"]].mean() for f in fid_df_list])
+    fid_stats[[c[0] + "drift" for c in coords]] = pd.DataFrame([f.agg({c: fwhm for c in coords}) for
+                                                                f in fid_df_list])[coords]
+    fid_stats["sigma"] = np.sqrt(fid_stats.ydrift**2 + fid_stats.xdrift**2)
+    all_drift = pd.concat([f[coords] - f[coords].mean() for f in fid_df_list])
+    if diagnostics:
+        fid2plot = fid_stats[["x0", "xdrift", "y0", "ydrift", "sigma"]] * yx_pix_size
+        fid2plot = pd.concat((fid2plot, fid_stats[["z0", "zdrift"]] * z_pix_size), 1)
+        drift2plot = all_drift[coords] * (z_pix_size, yx_pix_size, yx_pix_size)
+        fid2plot.sort_values("sigma").reset_index().plot(subplots=True)
+        fid2plot.hist(bins=32)
+        fig, axs = plt.subplots(1, 3, figsize=(9, 3))
+        axs[0].get_shared_x_axes().join(axs[0], axs[1])
+        for ax, k in zip(axs, ("x0", "y0", "z0")):
+            d = drift2plot[k]
+            fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
+            bins = np.linspace(-1, 1, 64) * 2 * fwhm
+            d.hist(ax=ax, bins=bins, normed=True)
+            ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
+            ax.set_yticks([])
+        axs[1].set_xlabel("Drift (nm)")
+    return fid_stats, all_drift
+
+
 def remove_xy_mean(df):
     df_new = df.astype(np.float)
     xyz_mean = df_new[coords].mean()
@@ -89,100 +200,3 @@ def remove_drift(df_data, drift):
     # df_data_dc.reset_index("frame", inplace=True)
     # return df_data_dc
     return df_data_dc.reset_index("frame")
-
-
-def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_size=1):
-    """Calculate various stats"""
-    fwhm = lambda x: x.std() * (2 * np.sqrt(2 * np.log(2)))
-    fid_stats = pd.DataFrame([f[coords + ["amp"]].mean() for f in fid_df_list])
-    fid_stats[[c[0] + "drift" for c in coords]] = pd.DataFrame([f.agg({c:fwhm for c in coords}) for
-                                                    f in fid_df_list])[coords]
-    fid_stats["sigma"] = np.sqrt(fid_stats.ydrift**2 + fid_stats.xdrift**2)
-    all_drift = pd.concat([f[coords] - f[coords].mean() for f in fid_df_list])
-    if diagnostics:
-        fid2plot = fid_stats[["x0", "xdrift", "y0", "ydrift", "sigma"]] * yx_pix_size
-        fid2plot = pd.concat((fid2plot, fid_stats[["z0", "zdrift"]] * z_pix_size), 1)
-        drift2plot = all_drift[coords] * (z_pix_size, yx_pix_size, yx_pix_size)
-        fid2plot.sort_values("sigma").reset_index().plot(subplots=True)
-        fid2plot.hist(bins=32)
-        fig, axs = plt.subplots(1, 3, figsize=(9, 3))
-        axs[0].get_shared_x_axes().join(axs[0], axs[1])
-        for ax, k in zip(axs, ("x0", "y0", "z0")):
-            d = drift2plot[k]
-            fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
-            bins = np.linspace(-1, 1, 64) * 2 * fwhm
-            d.hist(ax=ax, bins=bins, normed=True)
-            ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
-            ax.set_yticks([])
-        axs[1].set_xlabel("Drift (nm)")
-    return fid_stats, all_drift
-
-
-def extract_fiducials(df, blobs, radius, diagnostics=False):
-    """Do the actual filtering
-    
-    We're doing it sequentially because we may run out of memory.
-    If initial DataFrame is 18 GB (1 GB per column) and we have 200 """
-    if diagnostics:
-        pipe = None
-    else:
-        pipe = io.StringIO()
-    fiducials_dfs = [df[np.sqrt((df.x0 - x) ** 2 + (df.y0 - y) ** 2) < radius]
-        for y, x in tqdm.tqdm(blobs, leave=False, desc="Extracting Fiducials", file=pipe)]
-    
-    return fiducials_dfs
-
-
-def clean_fiducials(fiducials_df, order="amp"):
-    """Clean up fiducials after an inital round of `extract_fiducials`"""
-    # remove any duplicates in a given frame by only keeping the localization with the largest count
-    # should clean up with ptest.amp/ptest.offset/ptest.sigma_z
-    # can add column and use that instead
-    # fiducials_dfs = [f.assign(fom = lambda df : df.amp / df.offset / df.sigma_z) for f in fiducials_dfs]
-    # could put the refine by centroid step here.
-    clean_fiducials = [sub_df.sort_values(order, ascending=False).groupby('frame').first()
-                       for sub_df in fiducials_dfs]
-
-
-def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, threshold=0, blob_thresh=None, **kwargs):
-    """Find fiducials in pointilist PALM data
-    
-    The key here is to realize that there should be on fiducial per frame"""
-    # incase we subsample the frame number
-    num_frames = df.frame.max() - df.frame.min()
-    hist_2d = palm_hist(df, yx_shape, subsampling)
-    pf = PeakFinder(hist_2d.astype(int), 1 / subsampling)
-    # no blobs found so try again with a lower threshold
-    pf.thresh = threshold
-    bkwargs = dict()
-    if sigmas is not None:
-        try:
-            # see if the user passed more than one value
-            smin, smax = sigmas
-            # flip them if necessary
-            if smin > smax:
-                smin, smax = smax, smin
-            bkwargs = dict(min_sigma=smin, max_sigma=smax)
-        except TypeError:
-            # only one value
-            pf.blob_sigma = sigmas
-    pf.find_blobs(**bkwargs)
-    pf.prune_blobs(10 / subsampling)
-    # need to recalculate the "amplitude" in a more inteligent way for
-    # these types of data, in this case we want to take the sum over a small box
-    # area
-    amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),)*2)].sum() for y, x, s, a in pf.blobs])
-    pf._blobs[:, 3] = amps
-    if blob_thresh is None:
-        blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10 * subsampling)
-    pf.blobs = pf.blobs[pf.blobs[:, 3] > blob_thresh]
-    if diagnostics:
-        pf.plot_blobs(**kwargs)
-        pf.plot_blob_grid(window=int(7 / subsampling))
-    if not pf.blobs.size:
-        # still no blobs then raise error
-        raise RuntimeError("No blobs found!")
-    if pf.blobs[:, 3].max() < num_frames * subsampling / 2:
-        logger.warn("Drift maybe too high to find fiducials")
-    # correct positions for subsampling
-    return pf.blobs[:, :2] * subsampling
