@@ -200,3 +200,39 @@ def remove_drift(df_data, drift):
     # df_data_dc.reset_index("frame", inplace=True)
     # return df_data_dc
     return df_data_dc.reset_index("frame")
+
+
+def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnostics=False, **kwargs):
+    """A heuristic to choose "good" fiducials based on their residual drift
+    
+    min_thresh and max_thresh are expressed in pixels"""
+    # remove the drift, check residual drift, use that
+    # calc the sigma for the set of fiducials
+    temp_drift = calc_drift(fids, diagnostics=diagnostics)
+    # remove drift from fiducials
+    fids_dc = [pdiag.remove_drift(fid.reset_index(), temp_drift) for fid in fids]
+    s = calc_fiducial_stats(fids_dc, diagnostics=diagnostics, **kwargs)[0].sigma
+    # sort from smallest to largest
+    s = s.sort_values()
+    # we have two thresholds
+    # ok fiducials
+    below_maxthresh = (s < max_thresh)
+    # really good fiducials (wouldn't it be nice to automatically determine these thresholds from the data ... )
+    below_minthresh = (s < min_thresh)
+    if below_minthresh.sum() >= min_num:
+        # if there's more than 5 really good fiducials, use them
+        logger.debug("using only minthresh fids {}".format(min_thresh))
+        good_fids = s[below_minthresh]
+    else:
+        if below_maxthresh.sum() == 0:
+            # there's no matching fiducials, take the best one
+            logger.debug("Only one good fiducial be aware")
+            good_fids = s.iloc[:1]
+        else:
+            logger.debug("using min and max thresh = {}, {}".format(min_thresh, max_thresh))
+            # use all the really good ones, plus at most five of the ok ones
+            logger.debug("# below min {}  below max {}".format(below_minthresh.sum(), below_maxthresh.sum()))
+            good_fids = s[below_maxthresh].iloc[:below_minthresh.sum() + min_num]
+    # extract from the original list and return the new list
+    logger.debug("# fids {}".format(len(good_fids)))
+    return [fids[i] for i in good_fids.index], good_fids.quantile(0.75)
