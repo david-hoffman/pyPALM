@@ -31,6 +31,7 @@ import dask.array
 
 greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in range(256)])
 
+
 def choose_dtype(max_value):
     """choose the appropriate dtype for saving images"""
     # if any type of float, use float32
@@ -587,7 +588,7 @@ class DepthCodedImage(np.ndarray):
         # overlay the alpha channel over the color image
         ax.matshow(new_alpha, cmap=greys_alpha_cm)
         # add the colorbar
-        fig.colorbar(cbar, label="z ({})".format(unit))
+        fig.colorbar(cbar, label="z ({})".format(unit), ax=ax, pad=0.01)
         # add scalebar if requested
         if scalebar_size:
             # make sure the length makes sense in data units
@@ -607,8 +608,9 @@ class DepthCodedImage(np.ndarray):
                                        )
             # add the scalebar
             ax.add_artist(scalebar)
-        # remove ticks and spines
-        ax.set_axis_off()
+        # remove ticks
+        ax.set_yticks([])
+        ax.set_xticks([])
         # return fig and ax for further processing
         return fig, ax
 
@@ -629,7 +631,7 @@ def _gen_zplane(yx_shape, df, zplane, mag, diffraction_limit):
     return toreturn
 
 
-def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit):
+def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
     """Generate a 3D image with gaussian point clouds
 
     Parameters
@@ -647,10 +649,11 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit):
     rendered_planes = [dask.array.from_delayed(_gen_zplane(yx_shape, df, zplane, mag, diffraction_limit), new_shape, np.float)
                                    for zplane in zplanes]
     to_compute = dask.array.stack(rendered_planes)
-    return to_compute.compute()
+    return to_compute.compute(num_workers=num_workers)
 
 
-def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, diffraction_limit=False, hist=False, **kwargs):
+def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, diffraction_limit=False,
+                hist=False, num_workers=None, **kwargs):
     """Generates and saves a gaussian rendered 3D image along with the relevant metadata in a tif stack
 
     Parameters
@@ -677,7 +680,7 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
 
     # generate the actual image
     if not hist:
-        img3d = gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit)
+        img3d = gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=num_workers)
     else:
         dz = np.diff(zplanes)
         bins = [np.concatenate((zplanes[:-1] - dz / 2, zplanes[-2:] + dz[-1] / 2))]
