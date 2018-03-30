@@ -83,3 +83,67 @@ def group(df, radius, gap):
         df_cache = df_cache[(frame - df_cache.frame) < gap]
         new_df_list.append(peaks)
     return pd.concat(new_df_list)
+
+
+# def agg_groups(df_grouped):
+#     def f(x):
+#         if len(x) < 2:
+#             x = x.drop("group_id", 1)
+#             x["groupsize"] = 1
+#             return x
+        
+#         coords = ["x", "y", "z"]
+#         x0s = [c + '0' for c in coords]
+#         sigmas = ["sigma_" + c for c in coords]
+        
+#         d = pd.DataFrame(np.nan, columns=x0s + sigmas, index=x.index[:1])
+#         inv_sigma = (1 / x[sigmas].values**2).sum(0)
+#         d[sigmas] = 1 / np.sqrt(inv_sigma)
+        
+#         d[x0s] = (x[x0s].values / x[sigmas].values**2).sum(0) / inv_sigma
+            
+#         d["nphotons"] = x["nphotons"].sum()
+#         d["amp"] = x["amp"].sum()
+#         d["offset"] = x["offset"].mean()
+#         d["groupsize"] = len(x)
+#         d["frame"] = x["frame"].iloc[0]
+
+#         return d
+
+#     a = df_grouped.groupby("group_id").apply(f)
+#     a.index = a.index.droplevel(1)
+#     return a
+
+
+def agg_groups(df_grouped):
+    # define coordinates
+    coords = ["x", "y", "z"]
+    # save the labels for weighted coords and weights
+    w_coords = []
+    weights = []
+    # loop through coords generating weights and weighted coords
+    for c in coords:
+        s = "sigma_" + c
+        df_grouped[s + "_inv"] = 1 / df_grouped[s] ** 2
+        weights.append(s + "_inv")
+        x = c + "0"
+        df_grouped[x + "_w"] = df_grouped[x].mul(df_grouped[s + "_inv"], "index")
+        w_coords.append(x + "_w")
+    # groupby group_id and sum
+    temp_gb = df_grouped.groupby("group_id")
+    # finish weighted mean
+    new_coords = temp_gb[w_coords].sum() / temp_gb[weights].sum().values
+    new_coords.columns = [c.replace("_w", "") for c in new_coords.columns]
+    # calc new sigma
+    new_sigmas = np.sqrt(1 / temp_gb[weights].sum())
+    new_sigmas.columns = [c.replace("_inv", "") for c in new_sigmas.columns]
+    # calc new group params
+    new_amp = temp_gb[["amp", "nphotons", "chi2"]].sum()
+    new_frame = temp_gb[["frame"]].first()
+    groupsize = temp_gb.x0.count()
+    groupsize.name = "groupsize"
+    new_offset = temp_gb[["offset"]].mean()
+    # drop added columns from original data frame
+    df_grouped.drop(columns=w_coords + weights, inplace=True)
+    # return new data frame
+    return pd.concat([new_coords, new_sigmas, new_amp, new_frame, groupsize, new_offset], axis=1)
