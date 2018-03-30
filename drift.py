@@ -81,7 +81,7 @@ def extract_fiducials(df, blobs, radius, diagnostics=False):
     return fiducials_dfs
 
 
-def clean_fiducials(fiducials_dfs, order="amp", ascending=False, radius=None):
+def clean_fiducials(fiducials_dfs, order="amp", ascending=False, radius=None, zradius=None):
     """Clean up fiducials after an inital round of `extract_fiducials`
 
     will choose the fiducial with the largest (ascending=False), or smallest (ascending=True)
@@ -92,12 +92,17 @@ def clean_fiducials(fiducials_dfs, order="amp", ascending=False, radius=None):
     if radius is not None:
         # not using z to our advantage here ...
         # the main use for this section is to clean up outliers after an initial pass with extract_fiducials
-        fiducials_dfs = [df[np.sqrt(((df[["x0", "y0"]] - df[["x0", "y0"]].mean())**2).sum(1)) < radius]
+        c = ["x0", "y0"]
+        r = (radius, radius)
+        if zradius is not None:
+            c = c + ["z0"]
+            r = r + (zradius, )
+        fiducials_dfs = [df[np.sqrt((((df[c] - df[c].median()) / r)**2).sum(1)) < 1]
                          for df in fiducials_dfs]
     # order fiducials in each frame by the chosen value and direction, and take the first value
     # i.e. take smallest or largest
     clean_fiducials = [sub_df.sort_values(order, ascending=ascending).groupby('frame').first()
-                       for sub_df in fiducials_dfs]
+                       for sub_df in fiducials_dfs if len(sub_df)]
     return clean_fiducials
 
 
