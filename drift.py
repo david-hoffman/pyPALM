@@ -131,7 +131,7 @@ def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_s
             d = drift2plot[k]
             fwhm = d.std() * 2 * np.sqrt(2 * np.log(2))
             bins = np.linspace(-1, 1, 64) * 2 * fwhm
-            d.hist(ax=ax, bins=bins, normed=True)
+            d.hist(ax=ax, bins=bins, density=True)
             ax.set_title("$\Delta {{{}}}$ = {:.0f}".format(k[0], fwhm))
             ax.set_yticks([])
         axs[1].set_xlabel("Drift (nm)")
@@ -215,8 +215,10 @@ def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnosti
     # calc the sigma for the set of fiducials
     temp_drift = calc_drift(fids, diagnostics=diagnostics)
     # remove drift from fiducials
-    fids_dc = [pdiag.remove_drift(fid.reset_index(), temp_drift) for fid in fids]
-    s = calc_fiducial_stats(fids_dc, diagnostics=diagnostics, **kwargs)[0].sigma
+    fids_dc = [remove_drift(fid.reset_index(), temp_drift) for fid in fids]
+    s = calc_fiducial_stats(fids_dc, diagnostics=diagnostics, **kwargs)[0]
+    # remove zdrift outliers
+    s = s[s.zdrift <= s.zdrift.quantile(0.75)].sigma
     # sort from smallest to largest
     s = s.sort_values()
     # we have two thresholds
