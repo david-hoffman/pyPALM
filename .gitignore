@@ -223,3 +223,8 @@ notebooks/PointMatchData/
 *.sav
 *_Settings.txt
 *.anc
+
+#######
+## Dask
+#######
+dask*
