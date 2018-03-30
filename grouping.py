@@ -6,9 +6,16 @@ All code related to drift correction of PALM data
 
 Copyright (c) 2017, David Hoffman
 """
+import psutil
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
+import dask.dataframe as dd
+import dask.multiprocessing
+# get a logger
+import logging
+logger = logging.getLogger(__name__)
+
 
 def find_matches(frames, radius):
     """Find matching peaks between two frames
@@ -35,7 +42,7 @@ def find_matches(frames, radius):
         if len(m) == 1:
             return [i, m[0]]
         elif len(m) == 0:
-            # should never get here
+            # should never get here, see list comprehension below
             raise RuntimeError("Something went wrong in `closest_match`")
         distances = ((t0.data[i] - t1.data[m])**2).sum(1)
         return [i, m[distances.argmin()]]
@@ -45,14 +52,23 @@ def find_matches(frames, radius):
     return pair_matches
 
 
-def group(df, radius, gap):
-    """Group peaks based on x y locations"""
+def group(df, radius, gap, frame_reset=np.inf):
+    """Group peaks based on x y locations
+
+    Parameters
+    ----------
+    df : pandas DataFrame
+    radius : float
+    gap : int
+    frame_reset : int"""
     new_df_list = []
+    # should add a progress bar here
+    frame_min = df.frame.min()
     for frame, peaks in df.groupby("frame"):
         peaks = peaks.copy()
         # set/reset group_id
         peaks["group_id"] = -1
-        if frame == 0:
+        if not (frame - frame_min) % frame_reset:
             # group_id will be the index of the first peak
             df_cache = peaks
             df_cache.loc[peaks.index, "group_id"] = df_cache.index
