@@ -243,17 +243,3 @@ def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnosti
     # extract from the original list and return the new list
     logger.debug("# fids {}".format(len(good_fids)))
     return [fids[i] for i in good_fids.index], good_fids.quantile(0.75)
-
-
-def weighted_avg(df, cols=coords, weight="amp"):
-    # weight by inverse of sigmas of localizations
-    df = df.dropna()
-    temp_mean = df[cols].mul(df[weight], "index")
-    temp_var = (df[cols] ** 2).mul(df[weight], "index")
-    # calc weighted average
-    temp_mean = temp_mean.sum().div(df[weight].sum(), "index")
-    temp_std = np.sqrt(temp_var.sum().div(df[weight].sum(), "index") - temp_mean ** 2)
-    temp_std.index = ["sigma_" + c[0] for c in temp_std.index]
-    result = pd.concat((temp_mean, temp_std))
-    result["num_counts"] = len(df)
-    return result
