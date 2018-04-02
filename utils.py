@@ -7,6 +7,7 @@ Utility functions for pyPALM
 Copyright (c) 2018, David Hoffman
 """
 
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 import logging
@@ -111,6 +112,8 @@ def find_outliers(df_in, good_window, bad_window, sample_size=300000, classifier
     cl = classifier(n_jobs=-1)
     cl.fit(X, y)
 
-    df_classified = df_in.assign(good=cl.predict(df_in[feature_cols]))
+    def filter_func(another_df):
+        """filter dataframe using a trained classifier"""
+        return another_df[cl.predict(another_df[feature_cols]).astype(bool)]
 
-    return df_classified
+    return filter_func
