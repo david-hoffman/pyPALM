@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import tqdm
 import matplotlib.pyplot as plt
+from matplotlib.colors import PowerNorm
 from peaks.peakfinder import PeakFinder
 from skimage.filters import threshold_otsu
 from .render import palm_hist
@@ -138,7 +139,7 @@ def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_s
     return fid_stats, all_drift
 
 
-def remove_xy_mean(df):
+def remove_xyz_mean(df):
     df_new = df.astype(np.float)
     xyz_mean = df_new[coords].mean()
     df_new[coords] -= xyz_mean
@@ -152,9 +153,9 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
     if len(fiducials_df) == 1:
         # if there is only one fiducial then return that
         logger.debug("Only on fiducial passed to calc_drift")
-        toreturn = remove_xy_mean(fiducials_df[0])[coords]
+        toreturn = remove_xyz_mean(fiducials_df[0])[coords]
     else:
-        mean_removed = [remove_xy_mean(ff) for ff in fiducials_df]
+        mean_removed = [remove_xyz_mean(ff) for ff in fiducials_df]
         if diagnostics:
             # debugging diagnostics
             fig, axs = plt.subplots(3)
@@ -170,7 +171,27 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
         # if weighted is something, use that as the weights for the mean
         # if weighted is not a valid column name then it will raise an
         # exception
-        if weighted:
+        if weighted.lower() == "coords":
+            # save the labels for weighted coords and weights
+            w_coords = []
+            weights = []
+            # loop through coords generating weights and weighted coords
+            for x in coords:
+                c = x[0]
+                s = "sigma_" + c
+                df_means[s + "_inv"] = 1 / df_means[s] ** 2
+                weights.append(s + "_inv")
+                df_means[x + "_w"] = df_means[x].mul(df_means[s + "_inv"], "index")
+                w_coords.append(x + "_w")
+            # groupby group_id and sum
+            temp_gb = df_means.groupby("frame")
+            # finish weighted mean
+            new_coords = temp_gb[w_coords].sum() / temp_gb[weights].sum().values
+            new_coords.columns = [c.replace("_w", "") for c in new_coords.columns]
+            # calc new sigma
+            # return new data frame
+            toreturn = new_coords
+        elif weighted:
             # weight the coordinates
             logger.debug("Weighting by {}".format(weighted))
             df_means[coords] = df_means[coords].mul(df_means[weighted], "index")
@@ -180,7 +201,8 @@ def calc_drift(fiducials_df, weighted="amp", diagnostics=False, frames_index=Non
             toreturn = temp[coords].sum().div(temp[weighted].sum(), "index")
         else:
             toreturn = df_means.groupby("frame")[coords].mean()
-
+        # remove mean of total drift.
+        toreturn = remove_xyz_mean(toreturn)
     if diagnostics:
         toreturn.plot(subplots=True)
     if frames_index is None:
@@ -207,7 +229,7 @@ def remove_drift(df_data, drift):
     return df_data_dc.reset_index("frame")
 
 
-def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnostics=False, **kwargs):
+def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnostics=False, z_quantile=0.75, **kwargs):
     """A heuristic to choose "good" fiducials based on their residual drift
     
     min_thresh and max_thresh are expressed in pixels"""
@@ -218,7 +240,7 @@ def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnosti
     fids_dc = [remove_drift(fid.reset_index(), temp_drift) for fid in fids]
     s = calc_fiducial_stats(fids_dc, diagnostics=diagnostics, **kwargs)[0]
     # remove zdrift outliers
-    s = s[s.zdrift <= s.zdrift.quantile(0.75)].sigma
+    s = s[s.zdrift <= s.zdrift.quantile(z_quantile)].sigma
     # sort from smallest to largest
     s = s.sort_values()
     # we have two thresholds
@@ -242,4 +264,90 @@ def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnosti
             good_fids = s[below_maxthresh].iloc[:below_minthresh.sum() + min_num]
     # extract from the original list and return the new list
     logger.debug("# fids {}".format(len(good_fids)))
-    return [fids[i] for i in good_fids.index], good_fids.quantile(0.75)
+    return [fids[i] for i in good_fids.index], good_fids.quantile(z_quantile)
+
+
+def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1e-3, maxiters=100,
+                     max_thresh=0.5, min_thresh=0.25, min_num=8, clean=True, diagnostics=False, **kwargs):
+    """Iteratively remove drift from the data
+
+    Parameters
+    ----------
+
+    Returns
+    -------
+    """
+    # make a copy of the initial drift so it doesn't get overwritten
+    init_drift = init_drift.copy()
+    # initialize delta_drift and old_drift to nan so that one round of iteration occurs
+    delta_drift = init_drift.iloc[:1] * np.nan
+    old_drift = np.nan
+    # calculate the inital capture radius for gathering fiducials
+    capture_radius = min(50, np.abs(init_drift[["x0", "y0"]].values).max())
+    # begin iteration
+    for i in range(maxiters):
+        # If the user requests it make sure that the drift is interpolated.
+        # If the drift isn't interpolated then frames without fiducials will be dropped.
+        if frames_index is not None:
+            init_drift = init_drift.reindex(frames_index).interpolate(limit_direction="both")
+
+        logger.info("capture_radius {:.3f}".format(capture_radius))
+
+        # remove drift
+        data_dc = remove_drift(data, init_drift).dropna()
+
+        # calculate the remaining drift as the RMS of the residual drift
+        avg_drift = np.sqrt((delta_drift[["x0", "y0"]].std()**2).sum(skipna=False))
+
+        logger.info("{}: drift {:.2e}".format(i, avg_drift))
+        
+        # check if the drift is below atol or hasn't changed that much (rtol)
+        if avg_drift <= atol or abs(old_drift - avg_drift) / old_drift < rtol:
+            break
+
+        # save the avg_drift
+        old_drift = avg_drift
+
+        # find fiducials
+        fids_locations_dc = find_fiducials(data_dc, yx_shape, subsampling=1,
+                                           diagnostics=diagnostics, cmap="inferno", norm=PowerNorm(0.25),
+                                           sigmas=(1 / np.sqrt(1.6), max(capture_radius, np.sqrt(1.6) * 0.99)),
+                                           **kwargs)
+        # extract fiducials
+        fids_dc = extract_fiducials(data_dc, fids_locations_dc, max(capture_radius, 1))
+        # filter fids based on extent
+        if clean:
+            # pick smallest sigma_z
+            if capture_radius < 1:
+                radius = capture_radius
+            else:
+                radius = None
+            fids_dc = clean_fiducials(fids_dc, order="sigma_z", ascending=True, radius=radius)
+        
+        # choose "good" fiducials
+        good_fids_dc, s_max = choose_good_fids(fids_dc, max_thresh=max_thresh,
+                                               min_thresh=min_thresh,
+                                               min_num=min_num,
+                                               diagnostics=diagnostics, z_quantile=0.99)
+
+        logger.info("max_s = {}".format(s_max))
+        # update capture radius
+        capture_radius = max(s_max * 3, 0.5)
+        # calculate the delta drift
+        delta_drift = calc_drift(good_fids_dc, weighted="coords", frames_index=frames_index,
+                                 diagnostics=diagnostics)
+        # if there's only one fiducial use a rolling median for the drift.
+        if len(good_fids_dc) < 2:
+            logger.warn("Only one fiducial, smoothing drift")
+            delta_drift = delta_drift.rolling(100, 0, center=True, win_type="gaussian").mean(std=20)
+            capture_radius = max(np.abs(delta_drift[["x0", "y0"]].values).max(), 1)
+        # update total drift
+        init_drift += delta_drift
+    else:
+        logger.warn("Reached maxiters {}".format(maxiters))
+    
+    if diagnostics:
+        print(len(good_fids_dc))
+        calc_fiducial_stats(good_fids_dc, diagnostics=diagnostics)
+
+    return data_dc, init_drift, delta_drift, good_fids_dc

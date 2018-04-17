@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 coords = ["z0", "y0", "x0"]
 
+
 def crop(df, window, shift=False):
     """Crop a palm dataframe
 
@@ -75,7 +76,7 @@ def weighted_avg(df, cols=coords, weight="amp"):
     return result
 
 
-def find_outliers(df_in, good_window, bad_window, sample_size=300000, classifier=RandomForestClassifier):
+def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None):
     """Find outlier points by providing example good and bad data
 
     Parameters
@@ -92,9 +93,12 @@ def find_outliers(df_in, good_window, bad_window, sample_size=300000, classifier
         default is to use the RandomForestClassifier, but any sklearn classifier can be used
     """
     # bad data
-    bad = crop(df_in, bad_window)
+    if not isinstance(bad, pd.DataFrame):
+        # assume bad is window
+        bad = crop(df_in, bad)
     # good data
-    good = crop(df_in, good_window)
+    if not isinstance(good, pd.DataFrame):
+        good = crop(df_in, good)
 
     # make sure the sample size is reasonable
     sample_size = min((len(bad), len(good), sample_size))
@@ -104,11 +108,16 @@ def find_outliers(df_in, good_window, bad_window, sample_size=300000, classifier
     good = good.sample(n=sample_size).assign(good=1)
 
     df = pd.concat([bad, good]).sample(frac=1.0)  # put them together and then shuffle
-
-    feature_cols = ['nphotons', 'sigma_x', 'sigma_y', 'sigma_z', 'offset', 'amp', 'chi2']
+    if feature_cols is None:
+        # we want to use all columns, so that we can take into account groupsize
+        feature_cols = df.columns
+        # but should be agnostic to position, (may want to leave in z0 if doing it on a slab by slab basis)
+        for col in ("x0", "y0", "z0"):
+            feature_cols.remove(col)
+    # set up training data
     X = df.loc[:, feature_cols]
     y = df.good
-
+    # use all cores
     cl = classifier(n_jobs=-1)
     cl.fit(X, y)
 
