@@ -278,12 +278,20 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
     -------
     """
     # make a copy of the initial drift so it doesn't get overwritten
-    init_drift = init_drift.copy()
+    if init_drift is None:
+        if frames_index is None:
+            temp_frames = pd.Int64Index(np.arange(data.frame.min(), data.frame.max() + 1), name="frame")
+        else:
+            temp_frames = frames_index
+        init_drift = pd.DataFrame(0, index=temp_frames, columns=coords)
+        capture_radius = 40
+    else:
+        init_drift = init_drift.copy()
+        # calculate the inital capture radius for gathering fiducials
+        capture_radius = min(50, np.abs(init_drift[["x0", "y0"]].values).max())
     # initialize delta_drift and old_drift to nan so that one round of iteration occurs
     delta_drift = init_drift.iloc[:1] * np.nan
     old_drift = np.nan
-    # calculate the inital capture radius for gathering fiducials
-    capture_radius = min(50, np.abs(init_drift[["x0", "y0"]].values).max())
     # begin iteration
     for i in range(maxiters):
         # If the user requests it make sure that the drift is interpolated.
@@ -294,7 +302,10 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
         logger.info("capture_radius {:.3f}".format(capture_radius))
 
         # remove drift
-        data_dc = remove_drift(data, init_drift).dropna()
+        if init_drift.iloc[0].sum() != 0:
+            data_dc = remove_drift(data, init_drift).dropna()
+        else:
+            data_dc = data
 
         # calculate the remaining drift as the RMS of the residual drift
         avg_drift = np.sqrt((delta_drift[["x0", "y0"]].std()**2).sum(skipna=False))
@@ -314,7 +325,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
                                            sigmas=(1 / np.sqrt(1.6), max(capture_radius, np.sqrt(1.6) * 0.99)),
                                            **kwargs)
         # extract fiducials
-        fids_dc = extract_fiducials(data_dc, fids_locations_dc, max(capture_radius, 1))
+        fids_dc = extract_fiducials(data_dc, fids_locations_dc, max(capture_radius, 1), diagnostics=diagnostics)
         # filter fids based on extent
         if clean:
             # pick smallest sigma_z
