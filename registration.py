@@ -610,3 +610,55 @@ def _keepclosesttree(X, Y, r=10):
     logger.debug("percentage x kept = {}, y kept = {}".format(len(xpoints) / len(X), len(ypoints) / len(Y)))
 
     return xpoints, ypoints
+
+
+# These are tools to propogate slab to slab alignment
+def to_augmented(B, t):
+    """Convert transform matrix and translation vector to an augmented transformation matrix
+    https://en.wikipedia.org/wiki/Affine_transformation#Augmented_matrix
+    """
+    # get the dimension of the transformation
+    d = len(B)
+    # build augmented matrix
+    aug_B = np.zeros((d + 1, d + 1))
+    aug_B[:d, :d] = B
+    aug_B[-1, :d] = t
+    aug_B[-1, -1] = 1
+    return aug_B
+
+
+def from_augmented(aug_B):
+    """Convert the augmented matrix back into transformation matrix + tranlsation vector"""
+    return aug_B[:-1, :-1], aug_B[-1, :-1]
+
+
+def propogate_transforms(regs, initial=None):
+    """Propagate transforms along slabs"""
+    # initialize
+    if initial is None:
+        initial = np.eye(regs[0].D + 1)
+    aug_Bs = [initial]
+    # make list of all augmented matrices
+    for reg in regs:
+        aug_Bs.append(to_augmented(reg.B, reg.translation))
+    # initialize Bs and ts
+    Bs = []
+    ts = []
+    # propogate
+    # for list of augmented matrices M0, M1, M2, ...
+    # return M0, M0 @ M1, M0 @ M1 @ M2, ...
+    for aug_B2 in itertools.accumulate(aug_Bs, lambda a, b: b @ a):
+        # split the propogated transform and save each one
+        B, t = from_augmented(aug_B2)
+        Bs.append(B)
+        ts.append(t)
+    return Bs, ts
+
+
+def apply_transform_to_slab(s, B, t):
+    """Apply a given transform to a slab"""
+    coords = ["x0", "y0", "z0"]
+    # copy slab so as to not change original.
+    s2 = s.copy()
+    s2[coords] = s[coords].values @ B.T + t
+    return s2
