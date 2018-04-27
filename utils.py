@@ -76,7 +76,7 @@ def weighted_avg(df, cols=coords, weight="amp"):
     return result
 
 
-def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None):
+def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None, **kwargs):
     """Find outlier points by providing example good and bad data
 
     Parameters
@@ -101,28 +101,38 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
         good = crop(df_in, good)
 
     # make sure the sample size is reasonable
-    sample_size = min((len(bad), len(good), sample_size))
-    
-    # sample data and assign "good" column
-    bad = bad.sample(n=sample_size).assign(good=0)
-    good = good.sample(n=sample_size).assign(good=1)
+    if sample_size is not None:
+        sample_size = min((len(bad), len(good), sample_size))
+        logger.info("Using {} sample size".format(sample_size))
+        # sample data and assign "good" column
+        bad = bad.sample(n=sample_size).assign(good=0)
+        good = good.sample(n=sample_size).assign(good=1)
+    else:
+        bad = bad.assign(good=0)
+        good = good.assign(good=1)
 
     df = pd.concat([bad, good]).sample(frac=1.0)  # put them together and then shuffle
     if feature_cols is None:
         # we want to use all columns, so that we can take into account groupsize
-        feature_cols = df.columns
+        feature_cols = list(df_in.columns)
         # but should be agnostic to position, (may want to leave in z0 if doing it on a slab by slab basis)
-        for col in ("x0", "y0", "z0"):
+        for col in ("x0", "y0", "z0", "frame"):
             feature_cols.remove(col)
+    logger.info("Using {}".format(feature_cols))
     # set up training data
     X = df.loc[:, feature_cols]
     y = df.good
-    # use all cores
-    cl = classifier(n_jobs=-1)
+    # try to use all cores
+    try:
+        cl = classifier(n_jobs=-1, **kwargs)
+    except TypeError:
+        cl = classifier(**kwargs)
     cl.fit(X, y)
 
     def filter_func(another_df):
         """filter dataframe using a trained classifier"""
-        return another_df[cl.predict(another_df[feature_cols]).astype(bool)]
+        new_df = another_df[cl.predict(another_df[feature_cols]).astype(bool)]
+        logger.info("Filtered {}% of peaks".format((1 - len(new_df) / len(another_df)) * 100))
+        return new_df
 
     return filter_func
