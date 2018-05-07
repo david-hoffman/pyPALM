@@ -78,17 +78,19 @@ def group(df, radius, gap, frame_reset=np.inf):
         matches = find_matches([df_cache[["y0", "x0"]].values, peaks[["y0", "x0"]].values], radius)
         # get indices
         # need to deal with overlaps (two groups claim same peak)
-        try:
-            # if there is a new peak that matches to two or more different cached peaks then the newer of the
-            # cached peaks claims it. If the cached peaks have the same age then its a toss up.
-            cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
-        except ValueError as error:
-            # should log the error or raise as a warning.
-            pass
-        else:
-            # update groups
-            # need to use .values, because list results in DF
-            peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
+        if len(matches):
+            try:
+                # if there is a new peak that matches to two or more different cached peaks then the newer of the
+                # cached peaks claims it. If the cached peaks have the same age then its a toss up.
+                cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
+                print(cache_idx, peaks_idx)
+            except ValueError as error:
+                # should log the error or raise as a warning.
+                logger.warning(error)
+            else:
+                # update groups
+                # need to use .values, because list results in DF
+                peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
         # ungrouped peaks get their own group_id
         peaks.group_id.where((peaks.group_id != -1), peaks.index, inplace=True)
         # peaks.loc[(peaks.group_id != -1), "group_id"] = peaks.index
@@ -214,7 +216,7 @@ def count_blinks(offtimes, gap):
     """
     breaks = np.nonzero(offtimes > gap)[0]
     if breaks.size:
-        blinks = [offtimes[breaks[i] + 1:breaks[i+1]] for i in range(breaks.size - 1)]
+        blinks = [offtimes[breaks[i] + 1:breaks[i + 1]] for i in range(breaks.size - 1)]
     else:
         blinks = [offtimes]
     return ([len(blink) for blink in blinks])
