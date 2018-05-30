@@ -51,10 +51,11 @@ def crop(df, window, shift=False):
         else:
             df_filter &= df_coord > cmin
         df_filter &= df_coord < cmax
-        all_coords.append(coord)
-        cmins.append(cmin)
-
-    assert set(all_coords) == set(window.keys()), "all_coords doesn't equal input coords"
+        if coord in coords:
+            # only use coordinates for shifting
+            all_coords.append(coord)
+            cmins.append(cmin)
+            
     new_df = df[df_filter]
     if shift:
         new_df.loc[:, all_coords] -= cmins
