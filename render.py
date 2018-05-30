@@ -29,6 +29,9 @@ from scipy.misc import imsave
 import dask
 import dask.array
 
+import logging
+logger = logging.getLogger()
+
 greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in range(256)])
 
 
@@ -258,6 +261,7 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
 ### Gaussian Rendering
 _jit_calc_pad = njit(_calc_pad, nogil=True)
 
+
 @njit(nogil=True)
 def _jit_slice_maker(xs1, ws1):
     """Modified from the version in dphutils to allow jitting"""
@@ -327,6 +331,9 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
     img = np.zeros((yw * mag, xw * mag))
     # iterate through all localizations
     for i in range(len(params)):
+        if not np.isfinite(params[i]).all():
+            # skip nans
+            continue
         # pull parameters
         y0, x0, sy, sx = params[i]
         # adjust to new magnification
@@ -392,7 +399,7 @@ def _gen_img_sub_threaded(yx_shape, df, mag, multipliers, diffraction_limit, num
     return lazy_result.sum(0)
 
 
-def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False):
+def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0"):
     """Generate a 2D image, optionally with z color coding
 
     Parameters
@@ -413,6 +420,8 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         The number of threads to use during rendering. (Experimental)
     hist : bool
         Whether to use gaussian rendering or histogram
+    colorcode : string
+        key that exists in the data frame such that we can color code by any value.
 
     Returns
     -------
@@ -452,7 +461,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         if weight is not None:
             w *= df[weight].values
         # normalize z into the range of 0 to 1
-        norm_z = scale(df["z0"].values)
+        norm_z = scale(df[colorcode].values)
         # Calculate weighted colors for each z position
         wz = (w[:, None] * matplotlib.cm.get_cmap(cmap)(norm_z))
         # generate the weighted r, g, anb b images
@@ -465,7 +474,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         rgb[~np.isfinite(rgb)] = 0
         # add on the alpha img
         rgba = dask.array.dstack((rgb, img_w))
-        return DepthCodedImage(rgba.compute(), cmap, mag, (df["z0"].min(), df["z0"].max()))
+        return DepthCodedImage(rgba.compute(), cmap, mag, (df[colorcode].min(), df[colorcode].max()))
     else:
         # just return the alpha.
         return img_w.compute()
@@ -497,20 +506,21 @@ class DepthCodedImage(np.ndarray):
     def save(self, savepath):
         """Save data and metadata to a tif file"""
         info_dict = dict(
-                cmap=self.cmap,
-                mag=self.mag,
-                zrange=self.zrange
-            )
+            cmap=self.cmap,
+            mag=self.mag,
+            zrange=self.zrange
+        )
 
-        tif_kwargs = dict(imagej=True, resolution=(self.mag, self.mag),
+        tif_kwargs = dict(
+            imagej=True, resolution=(self.mag, self.mag),
             metadata=dict(
                 # let's stay agnostic to units for now
                 unit="pixel",
                 # dump info_dict into string
                 info=json.dumps(info_dict),
                 axes='YXC'
-                )
             )
+        )
 
         tif.imsave(fix_ext(savepath, ".tif"), tif_convert(self), **tif_kwargs)
 
@@ -580,13 +590,12 @@ class DepthCodedImage(np.ndarray):
         # make the figure and axes
         fig, ax = plt.subplots(**subplots_kwargs)
         # make the colorbar plot
-        cbar = ax.matshow(np.linspace(self.zrange[0], self.zrange[1], 256).reshape(16, 16), cmap=self.cmap)
+        zdata = np.linspace(self.zrange[0], self.zrange[1], 256).reshape(16, 16)
+        cbar = ax.matshow(zdata, zorder=-2, cmap=self.cmap)
+        ax.matshow(np.zeros_like(zdata), zorder=-1, cmap="Greys_r")
         # show the color data
-        ax.imshow(self.RGB, interpolation=None)
-        # normalize the alpha channel
-        new_alpha = self._norm_alpha(**norm_kwargs)
-        # overlay the alpha channel over the color image
-        ax.matshow(new_alpha, cmap=greys_alpha_cm)
+        ax.imshow(self._norm_data(True, **norm_kwargs), interpolation=None, zorder=0)
+        ax.set_facecolor("k")
         # add the colorbar
         fig.colorbar(cbar, label="z ({})".format(unit), ax=ax, pad=0.01)
         # add scalebar if requested
