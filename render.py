@@ -480,6 +480,48 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         return img_w.compute()
 
 
+def depthcodeimage(data, cmap="gist_rainbow"):
+    """Generate a 2D image, optionally with z color coding
+
+    Parameters
+    ----------
+    data : ndarray
+        The data to depth code, will depth code along the first axis
+    cmap : matplotlib cmap
+        The cmap to use during depth coding
+
+    Returns
+    -------
+    img : ndarray
+        If no cmap is specified then the result is a 2D array
+        If a cmap is specified then the result is a 3D array where
+        the last axis is RGBA. the A channel is just the intensity
+        It will not have gamma or clipping applied.
+    """
+    # Well thread this along the direction perpendicular to z so that we don't eat memory
+    # and to speed things up for large volumes
+    nz, ny, nx = data.shape
+    # we assume in this case that the data _is_ the weights
+    # normalize z into the range of 0 to 1
+    norm_z = np.linspace(0, 1, nz)
+    # Calculate weighted colors for each z position, drop alpha
+    wz = matplotlib.cm.get_cmap(cmap)(norm_z)[:, :3]
+    # generate the weighted r, g, anb b images
+    @dask.delayed
+    def func(d):
+        """Mean func of a plane"""
+        # convert to float
+        d = d.astype(float)
+        weighted_d = d[:, None] * wz[..., None]
+        rgba = np.concatenate((weighted_d.sum(0) / d.sum(0), d.sum(0, keepdims=True)))
+        # color at the end
+        rgba = np.rollaxis(rgba, 0, rgba.ndim)
+        return rgba
+    
+    rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)])
+    return DepthCodedImage(rgba.compute(), cmap, 1, (0, 1))
+
+
 class DepthCodedImage(np.ndarray):
     """A specialty class to handle depth coded images, especially saving and displaying"""
 
