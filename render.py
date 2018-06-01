@@ -507,31 +507,19 @@ def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
     # Calculate weighted colors for each z position, drop alpha
     wz = matplotlib.cm.get_cmap(cmap)(norm_z)[:, :3]
     # generate the weighted r, g, anb b images
-    if projection.lower() == "mean":
-        @dask.delayed
-        def func(d):
-            """Mean func of a plane"""
-            # convert to float
-            d = d.astype(float)
-            weighted_d = d[:, None] * wz[..., None]
-            rgba = np.concatenate((weighted_d.sum(0) / d.sum(0), d.sum(0, keepdims=True)))
-            # color at the end
-            rgba = np.rollaxis(rgba, 0, rgba.ndim)
-            return rgba
-    elif projection.lower() == "max":
-        @dask.delayed
-        def func(d):
-            """min func of a plane"""
-            rgba = np.hstack((wz[d.argmax(0)], d.max(0)[:, None]))
-            return rgba
-    elif projection.lower() == "min":
-        @dask.delayed
-        def func(d):
-            """min func of a plane"""
-            rgba = np.hstack((wz[d.argmin(0)], d.min(0)[:, None]))
-            return rgba
-    else:
-        raise ValueError("Projection of type {} not recognized".format(projection))
+    projection = projection.lower()
+    op = getattr(np.ndarray, projection)
+    @dask.delayed
+    def func(d):
+        """Mean func of a plane"""
+        # convert to float
+        d = d.astype(float)
+        weighted_d = d[:, None] * wz[..., None]
+        d_op = op(d, axis=0, keepdims=True)
+        rgba = np.concatenate((op(weighted_d, axis=0) / d_op, d_op))
+        # color at the end
+        rgba = np.rollaxis(rgba, 0, rgba.ndim)
+        return rgba
     
     rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)])
     return DepthCodedImage(rgba.compute(), cmap, 1, (0, 1))
