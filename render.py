@@ -480,7 +480,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         return img_w.compute()
 
 
-def depthcodeimage(data, cmap="gist_rainbow"):
+def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
     """Generate a 2D image, optionally with z color coding
 
     Parameters
@@ -506,19 +506,38 @@ def depthcodeimage(data, cmap="gist_rainbow"):
     norm_z = np.linspace(0, 1, nz)
     # Calculate weighted colors for each z position, drop alpha
     wz = matplotlib.cm.get_cmap(cmap)(norm_z)[:, :3]
+    # dtype default
+    dtype = data.dtype
     # generate the weighted r, g, anb b images
-    @dask.delayed
-    def func(d):
-        """Mean func of a plane"""
-        # convert to float
-        d = d.astype(float)
-        weighted_d = d[:, None] * wz[..., None]
-        rgba = np.concatenate((weighted_d.sum(0) / d.sum(0), d.sum(0, keepdims=True)))
-        # color at the end
-        rgba = np.rollaxis(rgba, 0, rgba.ndim)
-        return rgba
+    if projection.lower() == "mean":
+        # switch dtype
+        dtype = float
+        @dask.delayed
+        def func(d):
+            """Mean func of a plane"""
+            # convert to float
+            d = d.astype(float)
+            weighted_d = d[:, None] * wz[..., None]
+            rgba = np.concatenate((weighted_d.sum(0) / d.sum(0), d.sum(0, keepdims=True)))
+            # color at the end
+            rgba = np.rollaxis(rgba, 0, rgba.ndim)
+            return rgba
+    elif projection.lower() == "max":
+        @dask.delayed
+        def func(d):
+            """min func of a plane"""
+            rgba = np.hstack((wz[d.argmax(0)], d.max(0)[:, None]))
+            return rgba
+    elif projection.lower() == "min":
+        @dask.delayed
+        def func(d):
+            """min func of a plane"""
+            rgba = np.hstack((wz[d.argmin(0)], d.min(0)[:, None]))
+            return rgba
+    else:
+        raise ValueError("Projection of type {} not recognized".format(projection))
     
-    rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)])
+    rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), dtype) for d in np.rollaxis(data, 1)])
     return DepthCodedImage(rgba.compute(), cmap, 1, (0, 1))
 
 
