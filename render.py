@@ -509,20 +509,36 @@ def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
     # generate the weighted r, g, anb b images
     projection = projection.lower()
     op = getattr(np.ndarray, projection)
+    d_max = data.max()
+    d_min = data.min()
     @dask.delayed
     def func(d):
         """Mean func of a plane"""
         # convert to float
-        d = d.astype(float)
+        d = (d - d_min) / (d_max - d_min)
+        alpha = op(d, axis=0)[:, None]
         weighted_d = d[:, None] * wz[..., None]
-        d_op = op(d, axis=0, keepdims=True)
-        rgba = np.concatenate((op(weighted_d, axis=0) / d_op, d_op))
-        # color at the end
-        rgba = np.rollaxis(rgba, 0, rgba.ndim)
+        # doesn't make a difference for sum (mean) but does for max or min
+        rgb = np.rollaxis(op(weighted_d, axis=0), 1)
+        rgba = np.hstack((rgb, alpha))
         return rgba
     
     rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)])
     return DepthCodedImage(rgba.compute(), cmap, 1, (0, 1))
+
+
+def contrast_enhancement(data, vmax=None, vmin=None, **kwargs):
+    """Enhance the color in an RGB image
+
+    https://math.stackexchange.com/questions/906240/algorithms-to-increase-or-decrease-the-contrast-of-an-image"""
+    if vmax is None:
+        vmax = data.max()
+    if vmin is None:
+        vmin = data.min()
+
+    a = 1 / (vmax - vmin)
+    b = - vmin * a
+    return a * data + b
 
 
 class DepthCodedImage(np.ndarray):
@@ -573,8 +589,8 @@ class DepthCodedImage(np.ndarray):
     def load(cls, path):
         """Load previously saved data"""
         with tif.TiffFile(path) as file:
-            data = file.asarray()
             info_dict = json.loads(file.pages[0].imagej_tags["info"])
+            data = file.asarray()
         return cls(data, **info_dict)
 
     @property
@@ -603,12 +619,19 @@ class DepthCodedImage(np.ndarray):
         new_alpha = Normalize(clip=True, **vdict)(new_alpha)
         return new_alpha
 
-    def _norm_data(self, alpha, **kwargs):
-        new_alpha = self._norm_alpha(**kwargs)
-        if alpha:
-            new_data = np.dstack((self.RGB, new_alpha))
+    def _norm_data(self, alpha, contrast=False, **kwargs):
+        if contrast:
+            # do contrast enhancement only, if you want contrast
+            # and gamma you'll have to do it iteratively.
+            # d2 = d._norm_data(alpha=False, contrast=False, **kwargs)
+            # d3 = contrast_enhancement(d2, **kwargs2)
+            new_data = contrast_enhancement(self.RGB, **kwargs)
         else:
-            new_data = self.RGB * new_alpha[..., None]
+            new_alpha = self._norm_alpha(**kwargs)
+            if alpha:
+                new_data = np.dstack((self.RGB, new_alpha))
+            else:
+                new_data = self.RGB * new_alpha[..., None]
         return new_data
 
     def save_color(self, savepath, alpha=False, **kwargs):
@@ -639,7 +662,7 @@ class DepthCodedImage(np.ndarray):
         cbar = ax.matshow(zdata, zorder=-2, cmap=self.cmap)
         ax.matshow(np.zeros_like(zdata), zorder=-1, cmap="Greys_r")
         # show the color data
-        ax.imshow(self._norm_data(True, **norm_kwargs), interpolation=None, zorder=0)
+        ax.imshow(self._norm_data(False, **norm_kwargs), interpolation=None, zorder=0)
         ax.set_facecolor("k")
         # add the colorbar
         fig.colorbar(cbar, label="z ({})".format(unit), ax=ax, pad=0.01)
