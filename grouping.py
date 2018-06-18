@@ -97,7 +97,7 @@ def group(df, radius, gap, frame_reset=np.inf):
                 # need to use .values, because list results in DF
                 peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
         # ungrouped peaks get their own group_id
-        peaks.group_id.where((peaks.group_id != -1), peaks.index, inplace=True)
+        peaks.group_id.where((peaks.group_id != -1), peaks.index.values, inplace=True)
         # peaks.loc[(peaks.group_id != -1), "group_id"] = peaks.index
         # update df_cache and lifetimes
         # updating the cache takes a significant amount of time.
