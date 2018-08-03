@@ -159,11 +159,16 @@ def agg_groups(df_grouped):
     new_frame = temp_gb[["frame"]].last()
     groupsize = temp_gb.x0.count()
     groupsize.name = "groupsize"
-    new_offset = temp_gb[["offset"]].mean()
+    # take the mean of all remaining columns
+    other_columns = ["groupsize"] + w_coords + w_coords2 + weights
+    for df in (new_coords, new_sigmas, new_amp, new_frame):
+        other_columns += df.columns.tolist()
+    columns_to_mean = df_grouped.columns.difference(other_columns)
+    new_means = temp_gb[columns_to_mean].mean()
     # drop added columns from original data frame
     df_grouped.drop(columns=w_coords + weights + w_coords2, inplace=True)
     # return new data frame
-    return pd.concat([new_coords, new_sigmas, new_amp, new_frame, groupsize, new_offset], axis=1)
+    return pd.concat([new_coords, new_sigmas, new_amp, new_frame, groupsize, new_means], axis=1)
 
 
 def measure_peak_widths(y):

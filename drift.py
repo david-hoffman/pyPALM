@@ -279,6 +279,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
 
     Returns
     -------
+    data_dc, init_drift, delta_drift, good_fids_dc
     """
     # make a copy of the initial drift so it doesn't get overwritten
     if init_drift is None:
