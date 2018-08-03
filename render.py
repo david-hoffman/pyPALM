@@ -643,7 +643,7 @@ class DepthCodedImage(np.ndarray):
         if ext.lower() == ".tif":
             alpha = False
         norm_data = self._norm_data(alpha, **kwargs)
-        img8bit = (norm_data * 255).astype(np.uint8)
+        img8bit = (np.clip(norm_data, 0, 1) * 255).astype(np.uint8)
         if ext.lower() == ".tif":
             DepthCodedImage(img8bit, self.cmap, self.mag, self.zrange).save(savepath)
         else:
