@@ -328,7 +328,7 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
     radius = 5
     yw, xw = yx_shape
     # initialize the image
-    img = np.zeros((yw * mag, xw * mag))
+    img = np.zeros((int(yw * mag), int(xw * mag)))
     # iterate through all localizations
     for i in range(len(params)):
         if not np.isfinite(params[i]).all():
