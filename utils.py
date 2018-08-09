@@ -117,8 +117,11 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
         # we want to use all columns, so that we can take into account groupsize
         feature_cols = list(df_in.columns)
         # but should be agnostic to position, (may want to leave in z0 if doing it on a slab by slab basis)
-        for col in ("x0", "y0", "z0", "frame"):
-            feature_cols.remove(col)
+        for col in ("x0", "y0", "z0", "frame", "group_id"):
+            try:
+                feature_cols.remove(col)
+            except ValueError:
+                pass
     logger.info("Using {}".format(feature_cols))
     # set up training data
     X = df.loc[:, feature_cols]
