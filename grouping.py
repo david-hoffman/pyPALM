@@ -171,6 +171,25 @@ def agg_groups(df_grouped):
     return pd.concat([new_coords, new_sigmas, new_amp, new_frame, groupsize, new_means], axis=1)
 
 
+
+@dask.delayed
+def grouper(df, *args, **kwargs):
+    """Delayed wrapper around grouping and aggregating code"""
+    if len(df):
+        return agg_groups(group(df, *args, **kwargs))
+    return df
+
+
+def chunked_grouper(df, *args, numthreads=24, **kwargs):
+    """Chunk data and delayed group, return a list"""
+    length = len(df)
+    chunklen = (length + numthreads - 1) // numthreads
+    # Create argument tuples for each input chunk
+    grouped = [grouper(df.iloc[i * chunklen:(i + 1) * chunklen], *args, **kwargs)
+                                  for i in range(numthreads)]
+    return dask.delayed(pd.concat)(grouped, ignore_index=True)
+
+
 def measure_peak_widths(y):
     """Measure peak widths in thresholded data. 
 
