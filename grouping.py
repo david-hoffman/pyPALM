@@ -10,8 +10,7 @@ import psutil
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
-import dask.dataframe as dd
-import dask.multiprocessing
+import dask
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
@@ -57,7 +56,7 @@ def find_matches(frames, radius):
     return pair_matches
 
 
-def group(df, radius, gap, frame_reset=np.inf):
+def group(df, radius, gap, zradius=None, frame_reset=np.inf):
     """Group peaks based on x y locations
 
     Parameters
@@ -67,6 +66,17 @@ def group(df, radius, gap, frame_reset=np.inf):
     gap : int
     frame_reset : int
     """
+
+    # define norm functions for later
+    if zradius is None:
+        def norm(df_sub):
+            """return y, x pairs"""
+            return df_sub[["y0", "x0"]].values
+    else:
+        def norm(df_sub):
+            """return z, y, x pairs with normalized z for point matching"""
+            return df_sub[["z0", "y0", "x0"]].values / (zradius, 1, 1)
+
     new_df_list = []
     # should add a progress bar here
     frame_min = df.frame.min()
@@ -81,7 +91,7 @@ def group(df, radius, gap, frame_reset=np.inf):
             new_df_list.append(df_cache.copy())
             continue
         # search for matches
-        matches = find_matches([df_cache[["y0", "x0"]].values, peaks[["y0", "x0"]].values], radius)
+        matches = find_matches([norm(df_cache), norm(peaks)], radius)
         # get indices
         # need to deal with overlaps (two groups claim same peak)
         if len(matches):
@@ -156,7 +166,7 @@ def agg_groups(df_grouped):
     new_sigmas.columns = ["sigma_" + c[0] for c in new_sigmas.columns]
     # calc new group params
     new_amp = temp_gb[["amp", "nphotons", "chi2"]].sum()
-    new_frame = temp_gb[["frame"]].last()
+    new_frame = temp_gb[["frame"]].median().astype(int)
     groupsize = temp_gb.x0.count()
     groupsize.name = "groupsize"
     # take the mean of all remaining columns
