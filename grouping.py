@@ -79,44 +79,56 @@ def group(df, radius, gap, zradius=None, frame_reset=np.inf):
 
     new_df_list = []
     # should add a progress bar here
+    # cycle through all frames
     frame_min = df.frame.min()
     for frame, peaks in df.groupby("frame"):
         peaks = peaks.copy()
+        
         # set/reset group_id
         peaks["group_id"] = -1
+        
+        # reset cache if required
         if not (frame - frame_min) % frame_reset:
             # group_id will be the index of the first peak
             df_cache = peaks
             df_cache.loc[peaks.index, "group_id"] = df_cache.index
             new_df_list.append(df_cache.copy())
             continue
-        # search for matches
-        matches = find_matches([norm(df_cache), norm(peaks)], radius)
-        # get indices
-        # need to deal with overlaps (two groups claim same peak)
-        if len(matches):
-            try:
-                # if there is a new peak that matches to two or more different cached peaks then the newer of the
-                # cached peaks claims it. If the cached peaks have the same age then its a toss up.
-                cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
-            except ValueError as error:
-                # should log the error or raise as a warning.
-                logger.warning(error)
-            else:
-                # update groups
-                # need to use .values, because list results in DF
-                peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
+            
+        # clear cache of old stuff
+        df_cache = df_cache[(frame - df_cache.frame) < gap]
+        
+        if len(df_cache):
+            # if anything is still in the cache look for matches
+            # search for matches
+            matches = find_matches([norm(df_cache), norm(peaks)], radius)
+            # get indices
+            # need to deal with overlaps (two groups claim same peak)
+            if len(matches):
+                try:
+                    # if there is a new peak that matches to two or more different cached peaks then the newer of the
+                    # cached peaks claims it. If the cached peaks have the same age then its a toss up.
+                    cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
+                except ValueError as error:
+                    # should log the error or raise as a warning.
+                    logger.warning(error)
+                else:
+                    # update groups
+                    # need to use .values, because list results in DF
+                    peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
+        
         # ungrouped peaks get their own group_id
         peaks.group_id.where((peaks.group_id != -1), peaks.index.values, inplace=True)
         # peaks.loc[(peaks.group_id != -1), "group_id"] = peaks.index
+        
         # update df_cache and lifetimes
         # updating the cache takes a significant amount of time.
         df_cache = pd.concat((df_cache, peaks))
         # the commented line below is more accurate but about 4-5X slower
         # df_cache = agg_groups(df_cache).reset_index()
         df_cache = df_cache.drop_duplicates("group_id", "last")
-        df_cache = df_cache[(frame - df_cache.frame) < gap]
         new_df_list.append(peaks)
+        
     return pd.concat(new_df_list)
 
 
