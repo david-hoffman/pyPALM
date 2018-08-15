@@ -132,66 +132,109 @@ def group(df, radius, gap, zradius=None, frame_reset=np.inf):
     return pd.concat(new_df_list)
 
 
+# new code
 def agg_groups(df_grouped):
-    """Aggregate groups
+    """Aggregate groups, weighted mean as usual, and sigmas are standard error on the weighted
+    mean as calculated in the reference below.
     
-    https://en.wikipedia.org/wiki/Weighted_arithmetic_mean#Weighted_sample_variance
+    Gatz, Donald F., and Luther Smith.
+    “The Standard Error of a Weighted Mean Concentration—I. Bootstrapping vs Other Methods.”
+    Atmospheric Environment 29, no. 11 (June 1, 1995): 1185–93.
+    https://doi.org/10.1016/1352-2310(94)00210-C
     """
     coords = ["x", "y", "z"]
-    # save the labels for weighted coords and weights
-    w_coords = []
-    w_coords2 = []
-    weights = []
+    
+    # turns out that its fastest to use pandas aggs built in functions at all
+    # costs, even more memory, so we need to build the columns we'll use
+    # later on
+    
+    # coordinates
+    sigmas = []
+    # coordinates
+    xi = []
+    # weights
+    wi = []
+    # square weights
+    wi2 = []
+    # weighted coordinates
+    wi_xi = []
+    # square weighted coordinates
+    wi2_xi = []
+    # square weighted squared coordinates
+    wi2_xi2 = []
+    
     # loop through coords generating weights and weighted coords
     for c in coords:
-        # calculate weights
         s = "sigma_" + c
-        df_grouped[s + "_inv"] = 1 / df_grouped[s] ** 2
-        weights.append(s + "_inv")
+        sigmas.append(s)
         x = c + "0"
+        xi.append(x)
+        # calculate weights
+        wi.append("wi_" + c)
+        df_grouped[wi[-1]] = 1 / df_grouped[s] ** 2
+        # square weights
+        wi2.append("wi2_" + c)
+        df_grouped[wi2[-1]] = 1 / df_grouped[s] ** 4
         # weighted position
-        df_grouped[x + "_w"] = df_grouped[x].mul(df_grouped[s + "_inv"], "index")
-        w_coords.append(x + "_w")
-        # weighted position^2
-        df_grouped[x + "_w2"] = (df_grouped[x]**2).mul(df_grouped[s + "_inv"], "index")
-        w_coords2.append(x + "_w2")
+        wi_xi.append("wi_xi_" + c)
+        df_grouped[wi_xi[-1]] = df_grouped[x].mul(df_grouped[wi[-1]], "index")
+        # square weighted coordinates
+        wi2_xi.append("wi2_xi_" + c)
+        df_grouped[wi2_xi[-1]] = df_grouped[x].mul(df_grouped[wi2[-1]], "index")
+        # square weighted squared coordinates
+        wi2_xi2.append("wi2_xi2_" + c)
+        df_grouped[wi2_xi2[-1]] = (df_grouped[x] ** 2).mul(df_grouped[wi2[-1]], "index")
+        
+    
     # groupby group_id and sum
     temp_gb = df_grouped.groupby("group_id")
-    # calculate sum weights
-    sum_w = temp_gb[weights].sum().values
-    # finish weighted mean
-    new_coords = temp_gb[w_coords].sum() / sum_w
-    # doing this here to preserve order
-    new_coords2_values = (new_coords**2)[w_coords].values
-    new_coords.columns = [c.replace("_w", "") for c in new_coords.columns]
-    # calc new sigma
-    # basically the weighted std dev of the points added in quadrature to the 
-    # std dev of the std dev of all points
-    # $$
-    # \sqrt{\frac{\sum w_i (x_i - \mu^*)^2}{\sum w_i} + \frac{1}{\sum w_i}} \\
-    # \sqrt{\frac{\sum w_i x_i^2}{\sum w_i} - \mu^{*2} + \frac{1}{\sum w_i}} \\
-    # \sqrt{\frac{\sum w_i x_i^2 + 1}{\sum w_i} - \mu^{*2}} \\
-    # w_i = \frac{1}{\sigma_i^2}
-    # $$
-    new_sigmas = np.sqrt((temp_gb[w_coords2].sum() + 1) / sum_w -
-                         new_coords2_values)
-    new_sigmas.columns = ["sigma_" + c[0] for c in new_sigmas.columns]
+    
     # calc new group params
     new_amp = temp_gb[["amp", "nphotons", "chi2"]].sum()
-    new_frame = temp_gb[["frame"]].median().astype(int)
-    groupsize = temp_gb.x0.count()
+    new_frame = temp_gb[["frame"]].first()
+    groupsize = temp_gb.size()
     groupsize.name = "groupsize"
+    
+    # calculate sum weights
+    wi_bar = temp_gb[wi].sum().values
+    
+    # finish weighted mean
+    mu = temp_gb[wi_xi].sum() / wi_bar
+    
+    # doing this here to preserve order
+    mu.columns = [c[-1] + "0" for c in mu.columns]
+    
+    # calc new sigma
+    new_sigmas = (temp_gb[wi2_xi2].sum().values
+                  - 2 * mu[xi] * temp_gb[wi2_xi].sum().values
+                  + (mu[xi] ** 2) * temp_gb[wi2].sum().values)
+    gsize = groupsize.values[:, None]
+    # we know there'll be floating point errors from the following
+    # because we'll divide by zero for groups with one point
+    with np.errstate(divide='ignore', invalid='ignore'):
+        new_sigmas = np.sqrt((gsize / (gsize - 1)) * new_sigmas / wi_bar ** 2)
+    new_sigmas.columns = ["sigma_" + c[0] for c in xi]
+    # find the places we divided by zero and replace with single localization sigma
+    nan_locs = ~np.isfinite(new_sigmas).all(1)
+    new_sigmas[nan_locs] = temp_gb[sigmas].first()[nan_locs]
+    
     # take the mean of all remaining columns
-    other_columns = ["groupsize"] + w_coords + w_coords2 + weights
-    for df in (new_coords, new_sigmas, new_amp, new_frame):
+    # figure out columns to drop
+    extra_columns = wi + wi2 + wi_xi + wi2_xi + wi2_xi2
+    other_columns = ["groupsize"] + extra_columns
+    for df in (mu, new_sigmas, new_amp, new_frame):
         other_columns += df.columns.tolist()
+    other_columns += ["group_id"]
     columns_to_mean = df_grouped.columns.difference(other_columns)
+    # take the mean
     new_means = temp_gb[columns_to_mean].mean()
+    
     # drop added columns from original data frame
-    df_grouped.drop(columns=w_coords + weights + w_coords2, inplace=True)
+    df_grouped.drop(columns=extra_columns, inplace=True)
+    
     # return new data frame
-    return pd.concat([new_coords, new_sigmas, new_amp, new_frame, groupsize, new_means], axis=1)
-
+    df_agg = pd.concat([mu, new_sigmas, new_amp, new_frame, groupsize, new_means], axis=1)
+    return df_agg
 
 
 @dask.delayed
