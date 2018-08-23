@@ -190,7 +190,7 @@ def agg_groups(df_grouped):
     temp_gb = df_grouped.groupby("group_id")
     
     # calc new group params
-    new_amp = temp_gb[["amp", "nphotons", "chi2"]].sum()
+    new_amp = temp_gb[["amp", "nphotons", "chi2", "offset"]].sum()
     new_frame = temp_gb[["frame"]].first()
     groupsize = temp_gb.size()
     groupsize.name = "groupsize"
@@ -227,7 +227,10 @@ def agg_groups(df_grouped):
     other_columns += ["group_id"]
     columns_to_mean = df_grouped.columns.difference(other_columns)
     # take the mean
-    new_means = temp_gb[columns_to_mean].mean()
+    if len(columns_to_mean):
+        new_means = temp_gb[columns_to_mean].mean()
+    else:
+        new_means = pd.DataFrame()
     
     # drop added columns from original data frame
     df_grouped.drop(columns=extra_columns, inplace=True)
