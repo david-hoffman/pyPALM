@@ -722,9 +722,22 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
     mag : int
         The magnification factor to render the scene"""
     new_shape = tuple(np.array(yx_shape) * mag)
-    # print(dask.array.from_delayed(_gen_zplane(df, yx_shape, zplanes[0], mag), new_shape, np.float))
+    if diffraction_limit:
+        # we need to make sure that we make sure our sigma_z is large enoughso we don't have the
+        # equivalent of puncta, or worse, miss localizations entirely
+        # take the minimum spacing
+        try:
+            zspacing = np.diff(zplanes).min()
+        except ValueError:
+            # there was only one value
+            zspacing = 0
+        # copy our data so we don't affect original
+        df = df[["z0", "y0", "x0", "sigma_z", "sigma_y", "sigma_x"]]
+        # set min sigma_z to half min zspacing
+        df.sigma_z = np.fmax(zspacing * 0.5, df.sigma_z)
+    # Build delayed array
     rendered_planes = [dask.array.from_delayed(_gen_zplane(yx_shape, df, zplane, mag, diffraction_limit), new_shape, np.float)
-                                   for zplane in zplanes]
+                       for zplane in zplanes]
     to_compute = dask.array.stack(rendered_planes)
     return to_compute.compute(num_workers=num_workers)
 
@@ -757,6 +770,7 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
 
     # generate the actual image
     if not hist:
+        # we're doing a gaussian rendering
         img3d = gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=num_workers)
     else:
         dz = np.diff(zplanes)

@@ -6,11 +6,12 @@ All code related to drift correction of PALM data
 
 Copyright (c) 2017, David Hoffman
 """
-import psutil
+import os
 import numpy as np
 import pandas as pd
 from scipy.spatial import cKDTree
 import dask
+import tempfile
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ def find_matches(frames, radius):
     return pair_matches
 
 
-def group(df, radius, gap, zradius=None, frame_reset=np.inf):
+def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
     """Group peaks based on x y locations
 
     Parameters
@@ -64,18 +65,22 @@ def group(df, radius, gap, zradius=None, frame_reset=np.inf):
     df : pandas DataFrame
     radius : float
     gap : int
+    zscaling: float
+        Scale the z0 values and include them in point matching routine
+        i.e. if np.sqrt((x1 - x0)**2 + (y1 - y0)**2  + ((z1 - z0) / zcaling)**2) < r
+        then group points 1 and 0.
     frame_reset : int
     """
 
     # define norm functions for later
-    if zradius is None:
+    if zscaling is None:
         def norm(df_sub):
             """return y, x pairs"""
             return df_sub[["y0", "x0"]].values
     else:
         def norm(df_sub):
             """return z, y, x pairs with normalized z for point matching"""
-            return df_sub[["z0", "y0", "x0"]].values / (zradius, 1, 1)
+            return df_sub[["z0", "y0", "x0"]].values / (zscaling, 1, 1)
 
     new_df_list = []
     # should add a progress bar here
@@ -247,15 +252,74 @@ def grouper(df, *args, **kwargs):
         return agg_groups(group(df, *args, **kwargs))
     return df
 
+@dask.delayed
+def _grouper_to_file(filename, df, *args, **kwargs):
+    """Delayed wrapper around grouping and aggregating code"""
+    if len(df):
+        grouped_df = agg_groups(group(df, *args, **kwargs))
+        # log
+        logger.debug("Writing data to {}".format(filename))
+        grouped_df.to_hdf(filename, "data")
+        return filename
 
-def chunked_grouper(df, *args, numthreads=24, **kwargs):
+
+@dask.delayed
+def _file_to_grouper(filename):
+    return pd.read_hdf(filename, "data")
+
+
+def chunked_grouper(df, *args, numthreads=24, concat=True, **kwargs):
     """Chunk data and delayed group, return a list"""
     length = len(df)
     chunklen = (length + numthreads - 1) // numthreads
     # Create argument tuples for each input chunk
     grouped = [grouper(df.iloc[i * chunklen:(i + 1) * chunklen], *args, **kwargs)
-                                  for i in range(numthreads)]
-    return dask.delayed(pd.concat)(grouped, ignore_index=True)
+               for i in range(numthreads)]
+    if concat:
+        # make the concatenation step a task, this can result
+        # in failure if the data is too large and processes are used,
+        # because the data is concatenated remotely and then brought
+        # back to the main process.
+        return dask.delayed(pd.concat)(grouped, ignore_index=True)
+    else:
+        return grouped
+
+
+def _chunked_grouper_to_dir(directory, df, *args, numthreads=24, **kwargs):
+    """Chunk data and delayed group, return a list"""
+    length = len(df)
+    chunklen = (length + numthreads - 1) // numthreads
+    # Create argument tuples for each input chunk
+    basename = directory + "GrpFile{:05d}.h5"
+    logger.debug("Basename = {}".format(basename))
+    grouped = [_grouper_to_file(basename.format(i), df.iloc[i * chunklen:(i + 1) * chunklen], *args, **kwargs)
+               for i in range(numthreads)]
+    return grouped
+
+
+def slab_grouper(slabs, *args, **kwargs):
+    """Take a list of slabs, group them and return the grouped slabs"""
+    # intermediate results will be written to disk
+    # do everything within a temp directory
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # compute the groups, which are saved to file
+        logger.debug("tmpdir = {}".format(tmpdir))
+        dirname = os.path.join(tmpdir, "SlabDir{:05d}")
+
+        logger.info("Beginning calculation ...")
+        grouped_slabs_dirs = dask.delayed([
+            # make sure that each slabe is chunked grouped in a temporary dir in our main tempdir
+            _chunked_grouper_to_dir(dirname.format(i), slab, *args, **kwargs) for i, slab in enumerate(slabs)
+        ]).compute(scheduler="processes")
+        logger.info("... finishing calculation.")
+
+        # read back data into slabs
+        logger.info("Beginning reading back data ...")
+        grouped_slabs = dask.delayed([dask.delayed(pd.concat)(dask.delayed([_file_to_grouper(f) for f in d]))for d in grouped_slabs_dirs])
+        grouped_slabs = grouped_slabs.compute()
+        logger.info("... finishing reading back data")
+
+    return grouped_slabs
 
 
 def measure_peak_widths(y):
