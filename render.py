@@ -13,7 +13,7 @@ import os
 import numpy as np
 from numpy.core import atleast_1d, atleast_2d
 from numba import njit
-from dphutils import _calc_pad, scale
+from dphutils import _calc_pad, scale, get_git
 from dphplotting import auto_adjust
 
 import matplotlib.pyplot as plt
@@ -33,6 +33,12 @@ import logging
 logger = logging.getLogger()
 
 greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in range(256)])
+
+general_meta_data = {
+    "git revision": get_git(os.path.split(__file__)[0])
+}
+
+logger.info(general_meta_data)
 
 
 def choose_dtype(max_value):
@@ -583,6 +589,8 @@ class DepthCodedImage(np.ndarray):
             )
         )
 
+        tif_kwargs["metadata"].update(general_meta_data)
+
         tif.imsave(fix_ext(savepath, ".tif"), tif_convert(self), **tif_kwargs)
 
     @classmethod
@@ -796,12 +804,14 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
             )
         )
 
+    tif_kwargs["metadata"].update(general_meta_data)
+
     tif_ready = tif_convert(img3d)
     # check if bigtiff is necessary.
     if tif_ready.nbytes / (4 * 1024**3) < 0.95:
         tif_kwargs.update(dict(imagej=True))
     else:
-        tif_kwargs.update(dict(imagej=False, compress=6, bigtiff=True))
+        tif_kwargs.update(dict(imagej=False, bigtiff=True))
 
     # incase user wants to change anything
     tif_kwargs.update(kwargs)

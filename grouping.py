@@ -189,26 +189,25 @@ def agg_groups(df_grouped):
         # square weighted squared coordinates
         wi2_xi2.append("wi2_xi2_" + c)
         df_grouped[wi2_xi2[-1]] = (df_grouped[x] ** 2).mul(df_grouped[wi2[-1]], "index")
-        
-    
+
     # groupby group_id and sum
     temp_gb = df_grouped.groupby("group_id")
-    
+
     # calc new group params
     new_amp = temp_gb[["amp", "nphotons", "chi2", "offset"]].sum()
     new_frame = temp_gb[["frame"]].first()
     groupsize = temp_gb.size()
     groupsize.name = "groupsize"
-    
+
     # calculate sum weights
     wi_bar = temp_gb[wi].sum().values
-    
+
     # finish weighted mean
     mu = temp_gb[wi_xi].sum() / wi_bar
-    
+
     # doing this here to preserve order
     mu.columns = [c[-1] + "0" for c in mu.columns]
-    
+
     # calc new sigma
     new_sigmas = (temp_gb[wi2_xi2].sum().values
                   - 2 * mu[xi] * temp_gb[wi2_xi].sum().values
@@ -222,7 +221,7 @@ def agg_groups(df_grouped):
     # find the places we divided by zero and replace with single localization sigma
     nan_locs = ~np.isfinite(new_sigmas).all(1)
     new_sigmas[nan_locs] = temp_gb[sigmas].first()[nan_locs]
-    
+
     # take the mean of all remaining columns
     # figure out columns to drop
     extra_columns = wi + wi2 + wi_xi + wi2_xi + wi2_xi2
@@ -236,10 +235,10 @@ def agg_groups(df_grouped):
         new_means = temp_gb[columns_to_mean].mean()
     else:
         new_means = pd.DataFrame()
-    
+
     # drop added columns from original data frame
     df_grouped.drop(columns=extra_columns, inplace=True)
-    
+
     # return new data frame
     df_agg = pd.concat([mu, new_sigmas, new_amp, new_frame, groupsize, new_means], axis=1)
     return df_agg
