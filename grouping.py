@@ -248,8 +248,10 @@ def agg_groups(df_grouped):
 def grouper(df, *args, **kwargs):
     """Delayed wrapper around grouping and aggregating code"""
     if len(df):
-        return agg_groups(group(df, *args, **kwargs))
+        df = agg_groups(group(df, *args, **kwargs))
+    logger.info("Finished grouping {}, {}".format(args, kwargs))
     return df
+
 
 @dask.delayed
 def _grouper_to_file(filename, df, *args, **kwargs):
@@ -374,73 +376,3 @@ def count_blinks(offtimes, gap):
     else:
         blinks = [offtimes]
     return ([len(blink) for blink in blinks])
-
-
-"""
-temp_data = mito_data
-titles = ("On Times", "Off Times", "Number of Blinks")
-bins = (np.arange(128), np.arange(512), np.arange(60))
-for radius in (0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5):
-    # extract samples
-    %time more_samples_blinks = pdiag.extract_fiducials(temp_data, more_samples[["y0", "x0"]].values, radius, True)
-    print(len(temp_data))
-#     temp_data = pd.concat(more_samples_blinks)
-    print(len(temp_data))
-    # calculate localizations per sample
-
-    print("Calculating localizations ... ")
-    %time more_samples_localizations = np.array([f.groupby("frame").count().x0.reindex(np.arange(max_frame)).fillna(0).astype(int) for f in more_samples_blinks])
-    # clear ones with too much density to be reliable, ones with more than 10,000 on frames
-    # and ones without any
-    total_localizations = more_samples_localizations.sum(1)
-    more_samples_localizations = more_samples_localizations[(total_localizations < 1e4) & (total_localizations > 0)]
-    print("Kept samples = {}%".format(int(len(more_samples_localizations) / len(total_localizations) * 100)))
-    # calculate mean positions
-    # print("Calculating mean positions ... ")
-    # %time more_samples_positions = [f.mean() for f in more_samples_blinks]
-    # calculate on times
-    print("Calculating on times ... ")
-    # make sure the thing isn't on for more than 10000 frames, otherwise area is too dense
-    %time ontimes = [pdiag.measure_peak_widths((y > 0) * 1) for y in more_samples_localizations]
-    more_samples_ontimes = np.concatenate(ontimes)
-    # calculate off times
-    print("Calculating off times ... ")
-    %time offtimes = [pdiag.measure_peak_widths((y == 0) * 1) for y in more_samples_localizations]
-    more_samples_offtimes = np.concatenate(offtimes)
-    # when is the first time the histogram hits 0? That's our noise floor
-    noise_floor = np.bincount(more_samples_offtimes)[1:].argmin() + 1
-    print("noise_floor", noise_floor)
-    more_samples_offtimes2 = more_samples_offtimes#[more_samples_offtimes <= noise_floor]
-    
-    group_gap = int(np.percentile(more_samples_offtimes2, 90))
-    print("Group gap", group_gap)
-    p_100 = (more_samples_offtimes2 <= 100).sum() / more_samples_offtimes2.size
-    
-    blinks = np.concatenate([pdiag.count_blinks(s, group_gap) for s in offtimes])
-    
-    fig, axs = plt.subplots(1, 3, figsize=(9, 3))
-    to_plot = (more_samples_ontimes, more_samples_offtimes2, blinks)
-        
-    for ax, p, t, b in zip(axs.ravel(), to_plot, titles, bins):
-        p = np.clip(p, b[0], b[-1])
-        ax.hist(p, log=False, bins=b, histtype='stepfilled', color="lightblue", density=True);
-        ax.hist(p, log=False, bins=b, histtype='step', cumulative=True, color="blue", density=True);
-        ax1 = ax.twinx()
-        ax1.hist(p, log=True, bins=b, histtype='stepfilled', color="coral", density=True);
-        ax1.hist(p, log=True, bins=b, histtype='step', cumulative=True, color="red", density=True);
-        ax1.set_zorder(-1)
-        ax1.tick_params(axis='y', colors='red')
-        ax.patch.set_facecolor((1,1,1,0))
-        ax.set_title(t)
-    
-    if b[-1] > group_gap:
-        axs[1].axvline(group_gap, color="g")
-    axs[1].scatter([100], [p_100], label="{}% / 100".format(int(p_100 * 100)))
-    axs[1].legend(loc="lower right")
-     
-    t = "Halo-TOMM20 (JF525) 4K Blinking, Singles, radius = {:.2f}, gap = {}".format(radius, group_gap)
-    fig.suptitle(t, y=1)
-    fig.tight_layout()
-    #break
-    fig.savefig(t + ".png".format(radius), dpi=300, bbox_inches="tight")
-"""

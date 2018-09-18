@@ -405,7 +405,7 @@ def _gen_img_sub_threaded(yx_shape, df, mag, multipliers, diffraction_limit, num
     return lazy_result.sum(0)
 
 
-def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0"):
+def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0", zscaling=5 * 130):
     """Generate a 2D image, optionally with z color coding
 
     Parameters
@@ -445,16 +445,21 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
 
         def func(weights):
             """This is the histogram function"""
-            
+
             @dask.delayed
             def lazy_hist(sample, bins=10, range=None, normed=False, weights=None):
                 return np.histogramdd(sample, bins, range, normed, weights)[0]
-            
+
             l = lazy_hist(df[["y0", "x0"]].values, bins, weights=weights)
             return dask.array.from_delayed(l, np.array(yx_shape) * mag, np.float)
     else:
+        # if requested limit sigma_z values to that there aren't super bright guys.
+        min_sigma_z = 0
+        if diffraction_limit:
+            min_sigma_z = 0.5 * zscaling / mag
+
         # here want to weight by sigma_z just like we do with sigmas when generating the gaussians
-        w = (1 / (np.sqrt(2 * np.pi)) / df["sigma_z"]).values
+        w = 1 / (np.sqrt(2 * np.pi) * np.fmax(df["sigma_z"].values, min_sigma_z))
 
         def func(weights):
             """This is the gaussian renderer"""
@@ -568,7 +573,19 @@ class DepthCodedImage(np.ndarray):
             return
         self.cmap = getattr(obj, 'cmap', None)
         self.mag = getattr(obj, 'mag', None)
-        self.zrange = getattr(obj, 'zrange', None)
+        self._zrange = getattr(obj, '_zrange', None)
+
+    @property
+    def zrange(self):
+        """The z range of the depth coded image"""
+        return self._zrange
+
+    @zrange.setter
+    def zrange(self, new):
+        """Make sure the zrange is not a numpy object"""
+        zmin, zmax = new
+        # convert to float so that JSON can serialize them
+        self._zrange = float(zmin), float(zmax)
 
     def save(self, savepath):
         """Save data and metadata to a tif file"""
@@ -590,7 +607,6 @@ class DepthCodedImage(np.ndarray):
         )
 
         tif_kwargs["metadata"].update(general_meta_data)
-
         tif.imsave(fix_ext(savepath, ".tif"), tif_convert(self), **tif_kwargs)
 
     @classmethod
@@ -623,7 +639,7 @@ class DepthCodedImage(np.ndarray):
             vdict = auto_adjust(new_alpha)
         else:
             vdict = dict()
-        
+
         new_alpha = Normalize(clip=True, **vdict)(new_alpha)
         return new_alpha
 
@@ -660,7 +676,7 @@ class DepthCodedImage(np.ndarray):
     def save_alpha(self, savepath, **kwargs):
         # normalize path name to make sure that it end's in .tif
         DepthCodedImage(self.alpha, self.cmap, self.mag, self.zrange).save(savepath)
-        
+
     def plot(self, pixel_size=0.13, unit="μm", scalebar_size=None, subplots_kwargs=dict(), norm_kwargs=dict()):
         """Make a nice plot of the data, with a scalebar"""
         # make the figure and axes
@@ -787,36 +803,39 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
         # on 0 so has edges of -0.5 and 0.5
         bins = bins + [np.arange(0, dim + 1.0 / mag, 1 / mag) - 1 / mag / 2 for dim in yx_shape]
         img3d = fast_hist3d(df[["z0", "y0", "x0"]].values, bins)[0]
-    # save kwargs
-    tif_kwargs = dict(resolution=(mag, mag),
-        metadata=dict(
-            # spacing is the depth spacing for imagej
-            spacing=zspacing,
-            # let's stay agnostic to units for now
-            unit="pixel",
-            # we want imagej to interpret the image as a z-stack
-            # so set slices to the length of the image
-            slices=len(img3d),
-            # This information is mostly redundant with "spacing" but is included
-            # incase one wanted to render arbitrarily spaced planes.
-            labels=["z = {}".format(zplane) for zplane in zplanes],
-            axes="ZYX"
+    
+    # if user provides save path save image as well as return to user
+    if savepath:
+        # save kwargs
+        tif_kwargs = dict(resolution=(mag, mag),
+            metadata=dict(
+                # spacing is the depth spacing for imagej
+                spacing=zspacing,
+                # let's stay agnostic to units for now
+                unit="pixel",
+                # we want imagej to interpret the image as a z-stack
+                # so set slices to the length of the image
+                slices=len(img3d),
+                # This information is mostly redundant with "spacing" but is included
+                # incase one wanted to render arbitrarily spaced planes.
+                labels=["z = {}".format(zplane) for zplane in zplanes],
+                axes="ZYX"
+                )
             )
-        )
 
-    tif_kwargs["metadata"].update(general_meta_data)
+        tif_kwargs["metadata"].update(general_meta_data)
 
-    tif_ready = tif_convert(img3d)
-    # check if bigtiff is necessary.
-    if tif_ready.nbytes / (4 * 1024**3) < 0.95:
-        tif_kwargs.update(dict(imagej=True))
-    else:
-        tif_kwargs.update(dict(imagej=False, bigtiff=True))
+        tif_ready = tif_convert(img3d)
+        # check if bigtiff is necessary.
+        if tif_ready.nbytes / (4 * 1024**3) < 0.95:
+            tif_kwargs.update(dict(imagej=True))
+        else:
+            tif_kwargs.update(dict(imagej=False, bigtiff=True))
 
-    # incase user wants to change anything
-    tif_kwargs.update(kwargs)
-    # save the tif
-    tif.imsave(fix_ext(savepath, ".tif"), tif_ready, **tif_kwargs)
+        # incase user wants to change anything
+        tif_kwargs.update(kwargs)
+        # save the tif
+        tif.imsave(fix_ext(savepath, ".tif"), tif_ready, **tif_kwargs)
 
     # return data to user for further processing.
     return img3d
