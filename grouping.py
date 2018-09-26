@@ -38,7 +38,7 @@ def find_matches(frames, radius):
     # backwards looking, find points in frame0 that match points in frame1
     pair_matches = t1.query_ball_tree(t0, radius)
     # return only the closest match.
-    
+
     def closest_match(m, i):
         """i is index in frame1, m is index in frame0
         make sure to return frame0 index first
@@ -51,7 +51,7 @@ def find_matches(frames, radius):
         distances = ((t1.data[i] - t0.data[m])**2).sum(1)
         # return [frame0_idx, frame1_idx]
         return [m[distances.argmin()], i]
-    
+
     # return a list with only the closest peak.
     pair_matches = [closest_match(m, i) for i, m in enumerate(pair_matches) if len(m)]
     return pair_matches
@@ -88,10 +88,10 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
     frame_min = df.frame.min()
     for frame, peaks in df.groupby("frame"):
         peaks = peaks.copy()
-        
+
         # set/reset group_id
         peaks["group_id"] = -1
-        
+
         # reset cache if required
         if not (frame - frame_min) % frame_reset:
             # group_id will be the index of the first peak
@@ -99,10 +99,10 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
             df_cache.loc[peaks.index, "group_id"] = df_cache.index
             new_df_list.append(df_cache.copy())
             continue
-            
+
         # clear cache of old stuff
         df_cache = df_cache[(frame - df_cache.frame) < gap]
-        
+
         if len(df_cache):
             # if anything is still in the cache look for matches
             # search for matches
@@ -121,11 +121,11 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
                     # update groups
                     # need to use .values, because list results in DF
                     peaks.loc[peaks_idx, "group_id"] = df_cache.loc[cache_idx, "group_id"].values
-        
+
         # ungrouped peaks get their own group_id
         peaks.group_id.where((peaks.group_id != -1), peaks.index.values, inplace=True)
         # peaks.loc[(peaks.group_id != -1), "group_id"] = peaks.index
-        
+
         # update df_cache and lifetimes
         # updating the cache takes a significant amount of time.
         df_cache = pd.concat((df_cache, peaks))
@@ -133,7 +133,7 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
         # df_cache = agg_groups(df_cache).reset_index()
         df_cache = df_cache.drop_duplicates("group_id", "last")
         new_df_list.append(peaks)
-        
+
     return pd.concat(new_df_list)
 
 
@@ -141,18 +141,18 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
 def agg_groups(df_grouped):
     """Aggregate groups, weighted mean as usual, and sigmas are standard error on the weighted
     mean as calculated in the reference below.
-    
+
     Gatz, Donald F., and Luther Smith.
     “The Standard Error of a Weighted Mean Concentration—I. Bootstrapping vs Other Methods.”
     Atmospheric Environment 29, no. 11 (June 1, 1995): 1185–93.
     https://doi.org/10.1016/1352-2310(94)00210-C
     """
     coords = ["x", "y", "z"]
-    
+
     # turns out that its fastest to use pandas aggs built in functions at all
     # costs, even more memory, so we need to build the columns we'll use
     # later on
-    
+
     # coordinates
     sigmas = []
     # coordinates
@@ -167,7 +167,7 @@ def agg_groups(df_grouped):
     wi2_xi = []
     # square weighted squared coordinates
     wi2_xi2 = []
-    
+
     # loop through coords generating weights and weighted coords
     for c in coords:
         s = "sigma_" + c
@@ -324,7 +324,7 @@ def slab_grouper(slabs, *args, **kwargs):
 
 
 def measure_peak_widths(y):
-    """Measure peak widths in thresholded data. 
+    """Measure peak widths in thresholded data.
 
     Parameters
     ----------

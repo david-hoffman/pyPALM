@@ -23,7 +23,8 @@ import matplotlib.font_manager as fm
 from mpl_toolkits.axes_grid1.anchored_artists import AnchoredSizeBar
 
 from skimage.external import tifffile as tif
-from scipy.misc import imsave
+from imageio import imwrite
+from PIL.PngImagePlugin import PngInfo
 
 # get multiprocessing support
 import dask
@@ -35,8 +36,13 @@ logger = logging.getLogger()
 greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in range(256)])
 
 general_meta_data = {
-    "git revision": get_git(os.path.split(__file__)[0])
+    "git revision": get_git(os.path.split(__file__)[0]),
+    "module": __name__
 }
+
+image_software = tif.__name__ + "-" + tif.__version__ + "+" + general_meta_data["module"] + "-" + general_meta_data["git revision"]
+
+general_meta_data["image_software"] = image_software
 
 logger.info(general_meta_data)
 
@@ -587,13 +593,17 @@ class DepthCodedImage(np.ndarray):
         # convert to float so that JSON can serialize them
         self._zrange = float(zmin), float(zmax)
 
-    def save(self, savepath):
-        """Save data and metadata to a tif file"""
+    @property
+    def info_dict(self):
         info_dict = dict(
             cmap=self.cmap,
             mag=self.mag,
             zrange=self.zrange
         )
+        return info_dict
+
+    def save(self, savepath):
+        """Save data and metadata to a tif file"""
 
         tif_kwargs = dict(
             imagej=True, resolution=(self.mag, self.mag),
@@ -601,9 +611,10 @@ class DepthCodedImage(np.ndarray):
                 # let's stay agnostic to units for now
                 unit="pixel",
                 # dump info_dict into string
-                info=json.dumps(info_dict),
+                info=json.dumps(self.info_dict),
                 axes='YXC'
-            )
+            ),
+            software=image_software
         )
 
         tif_kwargs["metadata"].update(general_meta_data)
@@ -631,16 +642,19 @@ class DepthCodedImage(np.ndarray):
         """"""
         # power norm will normalize alpha to 0 to 1 after applying
         # a gamma correction and limiting data to vmin and vmax
-        pkwargs = dict(gamma=1, clip=True)
-        pkwargs.update(kwargs)
-        new_alpha = PowerNorm(**pkwargs)(self.alpha)
         # if auto is requested perform it
         if auto:
-            vdict = auto_adjust(new_alpha)
+            myalpha = self.alpha[self.alpha > 0]
+            vmin, vmax = np.percentile(myalpha, (1, 99))
+            vdict = dict(vmin=vmin, vmax=vmax)
         else:
             vdict = dict()
+        pkwargs = dict(gamma=1, clip=True)
+        pkwargs.update(vdict)
+        pkwargs.update(kwargs)
+        new_alpha = PowerNorm(**pkwargs)(self.alpha)
 
-        new_alpha = Normalize(clip=True, **vdict)(new_alpha)
+        new_alpha = Normalize(clip=True)(new_alpha)
         return new_alpha
 
     def _norm_data(self, alpha, contrast=False, **kwargs):
@@ -671,7 +685,21 @@ class DepthCodedImage(np.ndarray):
         if ext.lower() == ".tif":
             DepthCodedImage(img8bit, self.cmap, self.mag, self.zrange).save(savepath)
         else:
-            imsave(savepath, img8bit)
+            imwrite_kwargs = {}
+            if os.path.splitext(savepath)[-1].lower() == ".png":
+                pnginfo = PngInfo()
+
+                def add_text(k, v):
+                    """Stringify all the things"""
+                    pnginfo.add_text(str(k), str(v))
+                
+                for k, v in self.info_dict.items():
+                    add_text(k, v)
+                
+                add_text("software", image_software)
+                imwrite_kwargs["pnginfo"] = pnginfo
+
+            imwrite(savepath, img8bit, **imwrite_kwargs)
 
     def save_alpha(self, savepath, **kwargs):
         # normalize path name to make sure that it end's in .tif
@@ -803,11 +831,12 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
         # on 0 so has edges of -0.5 and 0.5
         bins = bins + [np.arange(0, dim + 1.0 / mag, 1 / mag) - 1 / mag / 2 for dim in yx_shape]
         img3d = fast_hist3d(df[["z0", "y0", "x0"]].values, bins)[0]
-    
+
     # if user provides save path save image as well as return to user
     if savepath:
         # save kwargs
-        tif_kwargs = dict(resolution=(mag, mag),
+        tif_kwargs = dict(
+            resolution=(mag, mag),
             metadata=dict(
                 # spacing is the depth spacing for imagej
                 spacing=zspacing,
@@ -820,8 +849,9 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
                 # incase one wanted to render arbitrarily spaced planes.
                 labels=["z = {}".format(zplane) for zplane in zplanes],
                 axes="ZYX"
-                )
-            )
+            ),
+            software=image_software
+        )
 
         tif_kwargs["metadata"].update(general_meta_data)
 
