@@ -282,6 +282,15 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
     data_dc, init_drift, delta_drift, good_fids_dc
     """
     # make a copy of the initial drift so it doesn't get overwritten
+
+    # make a simple function
+
+    def find_fiducials_simple(data_dc, capture_radius):
+        return find_fiducials(data_dc, yx_shape, subsampling=1,
+                              diagnostics=diagnostics, cmap="inferno", norm=PowerNorm(0.25),
+                              sigmas=(1 / np.sqrt(1.6), max(capture_radius, np.sqrt(1.6) * 0.99)),
+                              **kwargs)
+
     if init_drift is None:
         if frames_index is None:
             temp_frames = pd.Int64Index(np.arange(data.frame.min(), data.frame.max() + 1), name="frame")
@@ -289,7 +298,9 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
             temp_frames = frames_index
         init_drift = pd.DataFrame(0, index=temp_frames, columns=coords)
         if capture_radius is None:
-            capture_radius = 40
+            fid0 = find_fiducials_simple(data, 50)[:1]
+            fid0 = extract_fiducials(data, fid0, 50)[0]
+            capture_radius = max(fid0.std()[["x0", "y0"]].mean(), 5)
     else:
         init_drift = init_drift.copy()
         # calculate the inital capture radius for gathering fiducials
@@ -303,7 +314,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
         # If the user requests it make sure that the drift is interpolated.
         # If the drift isn't interpolated then frames without fiducials will be dropped.
         if frames_index is not None:
-            init_drift = init_drift.reindex(frames_index).interpolate(limit_direction="both")
+            init_drift = init_drift.reindex(frames_index).interpolate("slinear", fill_value="extrapolate", limit_direction="both")
 
         logger.info("capture_radius {:.3f}".format(capture_radius))
 
@@ -317,7 +328,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
         avg_drift = np.sqrt((delta_drift[["x0", "y0"]].std()**2).sum(skipna=False))
 
         logger.info("{}: drift {:.2e}".format(i, avg_drift))
-        
+
         # check if the drift is below atol or hasn't changed that much (rtol)
         if avg_drift <= atol or abs(old_drift - avg_drift) / old_drift < rtol:
             break
@@ -326,10 +337,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
         old_drift = avg_drift
 
         # find fiducials
-        fids_locations_dc = find_fiducials(data_dc, yx_shape, subsampling=1,
-                                           diagnostics=diagnostics, cmap="inferno", norm=PowerNorm(0.25),
-                                           sigmas=(1 / np.sqrt(1.6), max(capture_radius, np.sqrt(1.6) * 0.99)),
-                                           **kwargs)
+        fids_locations_dc = find_fiducials_simple(data_dc, capture_radius)
         # extract fiducials
         fids_dc = extract_fiducials(data_dc, fids_locations_dc[:max_extraction], max(capture_radius, 1), diagnostics=diagnostics)
         # filter fids based on extent
@@ -340,7 +348,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
             else:
                 radius = None
             fids_dc = clean_fiducials(fids_dc, order=order, ascending=True, radius=radius)
-        
+
         # choose "good" fiducials
         good_fids_dc, s_max = choose_good_fids(fids_dc, max_thresh=max_thresh,
                                                min_thresh=min_thresh,
@@ -368,7 +376,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
         gc.collect()
     else:
         logger.warn("Reached maxiters {}".format(maxiters))
-    
+
     if diagnostics:
         print(len(good_fids_dc))
         calc_fiducial_stats(good_fids_dc, diagnostics=diagnostics)
