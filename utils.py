@@ -10,6 +10,9 @@ Copyright (c) 2018, David Hoffman
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import *
+from sklearn.metrics.classification import *
 import logging
 logger = logging.getLogger(__name__)
 
@@ -77,7 +80,7 @@ def weighted_avg(df, cols=coords, weight="amp"):
     return result
 
 
-def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None, **kwargs):
+def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None, diagnostics=False, **kwargs):
     """Find outlier points by providing example good and bad data
 
     Parameters
@@ -112,7 +115,7 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
         bad = bad.assign(good=0)
         good = good.assign(good=1)
 
-    df = pd.concat([bad, good]).sample(frac=1.0)  # put them together and then shuffle
+    df = pd.concat([bad, good], ignore_index=True).sample(frac=1.0)  # put them together and then shuffle
     if feature_cols is None:
         # we want to use all columns, so that we can take into account groupsize
         feature_cols = list(df_in.columns)
@@ -126,12 +129,41 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
     # set up training data
     X = df.loc[:, feature_cols]
     y = df.good
+
+    # test train split for diagnostics
+    if diagnostics:
+        test_size = 0.1
+    else:
+        test_size = 0.0
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
+
+    def evaluate_preds(y_hat):
+        return pd.Series({
+            'precision': precision_score(y_test, y_hat),  # true positives
+            'recall': recall_score(y_test, y_hat),  # of all good ones
+            'f1': f1_score(y_test, y_hat),
+            'accuracy': accuracy_score(y_test, y_hat),
+            'roc_auc': roc_auc_score(y_test, y_hat)
+        })
+
+    def evaluate(clf):
+        y_hat = clf.predict(X_test)
+        return evaluate_preds(y_hat)
+
+    def feature_importances(clf):
+        pd.Series(dict(zip(X.columns, clf.feature_importances_))).sort_index().plot.bar()
+
     # try to use all cores
     try:
         cl = classifier(n_jobs=-1, **kwargs)
     except TypeError:
         cl = classifier(**kwargs)
-    cl.fit(X, y)
+    cl.fit(X_train, y_train)
+
+    if diagnostics:
+        print(evaluate(cl))
+        feature_importances(cl)
 
     def filter_func(another_df):
         """filter dataframe using a trained classifier"""

@@ -48,7 +48,6 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
             # only one value
             pf.blob_sigma = sigmas
     pf.find_blobs(**bkwargs)
-    pf.prune_blobs(10 / subsampling)
     # need to recalculate the "amplitude" in a more inteligent way for
     # these types of data, in this case we want to take the sum over a small box
     # area
@@ -293,7 +292,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
 
     if init_drift is None:
         if frames_index is None:
-            temp_frames = pd.Int64Index(np.arange(data.frame.min(), data.frame.max() + 1), name="frame")
+            temp_frames = pd.RangeIndex(data.frame.min(), data.frame.max() + 1, name="frame")
         else:
             temp_frames = frames_index
         init_drift = pd.DataFrame(0, index=temp_frames, columns=coords)
@@ -380,5 +379,6 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
     if diagnostics:
         print(len(good_fids_dc))
         calc_fiducial_stats(good_fids_dc, diagnostics=diagnostics)
+        plt.show()
 
     return data_dc, init_drift, delta_drift, good_fids_dc

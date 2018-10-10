@@ -639,7 +639,7 @@ class DepthCodedImage(np.ndarray):
         return np.asarray(self)[..., 3]
 
     def _norm_alpha(self, auto=False, **kwargs):
-        """"""
+        """Adjust alpha with Gamma and min max"""
         # power norm will normalize alpha to 0 to 1 after applying
         # a gamma correction and limiting data to vmin and vmax
         # if auto is requested perform it
@@ -658,6 +658,16 @@ class DepthCodedImage(np.ndarray):
         return new_alpha
 
     def _norm_data(self, alpha, contrast=False, **kwargs):
+        """Norm the data
+
+        Parameters:
+        alpha : bool
+            Include alpha channel or not
+        contrast : bool
+            maximize contrast using `contrast_enhancement`
+
+        kwargs are passed to DepthCodedImage._norm_alpha
+        """
         if contrast:
             # do contrast enhancement only, if you want contrast
             # and gamma you'll have to do it iteratively.
