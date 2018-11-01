@@ -9,7 +9,9 @@ Copyright (c) 2018, David Hoffman
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from xgboost import XGBClassifier
+from sklearn.preprocessing import StandardScaler, RobustScaler, PolynomialFeatures
+from sklearn.pipeline import make_pipeline
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import *
 from sklearn.metrics.classification import *
@@ -80,7 +82,7 @@ def weighted_avg(df, cols=coords, weight="amp"):
     return result
 
 
-def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestClassifier, feature_cols=None, diagnostics=False, **kwargs):
+def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagnostics=False, **kwargs):
     """Find outlier points by providing example good and bad data
 
     Parameters
@@ -130,6 +132,18 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
     X = df.loc[:, feature_cols]
     y = df.good
 
+    default_kwargs = dict(
+        learning_rate=0.1, n_estimators=1000, max_depth=10, min_child_weight=20, subsample=0.8, n_jobs=-1
+    )
+
+    # update with user parameters
+    default_kwargs.update(kwargs)
+
+    pipeline = make_pipeline(
+        PolynomialFeatures(degree=2, include_bias=False, interaction_only=False),
+        XGBClassifier(**default_kwargs)
+    )
+
     # test train split for diagnostics
     if diagnostics:
         test_size = 0.1
@@ -151,24 +165,15 @@ def find_outliers(df_in, good, bad, sample_size=300000, classifier=RandomForestC
         y_hat = clf.predict(X_test)
         return evaluate_preds(y_hat)
 
-    def feature_importances(clf):
-        pd.Series(dict(zip(X.columns, clf.feature_importances_))).sort_index().plot.bar()
-
-    # try to use all cores
-    try:
-        cl = classifier(n_jobs=-1, **kwargs)
-    except TypeError:
-        cl = classifier(**kwargs)
-    cl.fit(X_train, y_train)
+    pipeline.fit(X_train, y_train)
 
     if diagnostics:
-        print(evaluate(cl))
-        feature_importances(cl)
+        logger.info("Evaluation:\n{}".format(evaluate(pipeline).to_string()))
 
     def filter_func(another_df):
         """filter dataframe using a trained classifier"""
-        new_df = another_df[cl.predict(another_df[feature_cols]).astype(bool)]
-        logger.info("Filtered {}% of peaks".format((1 - len(new_df) / len(another_df)) * 100))
+        new_df = another_df[pipeline.predict(another_df[feature_cols]).astype(bool)]
+        logger.info("Filtered {:%} of peaks".format((1 - len(new_df) / len(another_df))))
         return new_df
 
     return filter_func

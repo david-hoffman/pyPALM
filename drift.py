@@ -124,7 +124,7 @@ def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_s
         fid2plot = fid_stats[["x0", "xdrift", "y0", "ydrift", "sigma"]] * yx_pix_size
         fid2plot = pd.concat((fid2plot, fid_stats[["z0", "zdrift"]] * z_pix_size), 1)
         drift2plot = all_drift[coords] * (z_pix_size, yx_pix_size, yx_pix_size)
-        fid2plot.sort_values("sigma").reset_index().plot(subplots=True)
+        fid2plot.sort_values("sigma").reset_index().plot(subplots=True, figsize=(4, 8))
         fid2plot.hist(bins=32)
         fig, axs = plt.subplots(1, 3, figsize=(9, 3))
         axs[0].get_shared_x_axes().join(axs[0], axs[1])
@@ -270,7 +270,7 @@ def choose_good_fids(fids, max_thresh=0.25, min_thresh=0.1, min_num=5, diagnosti
 def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1e-3, maxiters=100,
                      max_thresh=0.5, min_thresh=0.25, min_num=8, clean=True, diagnostics=False,
                      capture_radius=None, max_extraction=20, weighted="coords", order="sigma_z",
-                     **kwargs):
+                     ascending=True, init_iters=0, **kwargs):
     """Iteratively remove drift from the data
 
     Parameters
@@ -346,7 +346,7 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
                 radius = capture_radius
             else:
                 radius = None
-            fids_dc = clean_fiducials(fids_dc, order=order, ascending=True, radius=radius)
+            fids_dc = clean_fiducials(fids_dc, order=order, ascending=ascending, radius=radius)
 
         # choose "good" fiducials
         good_fids_dc, s_max = choose_good_fids(fids_dc, max_thresh=max_thresh,
@@ -360,8 +360,9 @@ def remove_all_drift(data, yx_shape, init_drift, frames_index, atol=1e-6, rtol=1
             good_fids_dc = fids_dc[:min_num]
 
         logger.info("max_s = {:.3f}".format(s_max))
-        # update capture radius
-        capture_radius = max(s_max * 3, 0.5)
+        # update capture radius if not in init iterations.
+        if i >= init_iters - 1:
+            capture_radius = max(s_max * 3, 0.5)
         # calculate the delta drift
         delta_drift = calc_drift(good_fids_dc, weighted=weighted, frames_index=frames_index,
                                  diagnostics=diagnostics)
