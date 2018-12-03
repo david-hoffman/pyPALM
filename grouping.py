@@ -101,7 +101,7 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
             continue
 
         # clear cache of old stuff
-        df_cache = df_cache[(frame - df_cache.frame) < gap]
+        df_cache = df_cache[(frame - df_cache.frame) <= gap]
 
         if len(df_cache):
             # if anything is still in the cache look for matches

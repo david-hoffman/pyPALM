@@ -456,11 +456,11 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
             def lazy_hist(sample, bins=10, range=None, normed=False, weights=None):
                 return np.histogramdd(sample, bins, range, normed, weights)[0]
 
-            l = lazy_hist(df[["y0", "x0"]].values, bins, weights=weights)
-            return dask.array.from_delayed(l, np.array(yx_shape) * mag, np.float)
+            lazy_result = lazy_hist(df[["y0", "x0"]].values, bins, weights=weights)
+            return dask.array.from_delayed(lazy_result, np.array(yx_shape) * mag, np.float)
     else:
         # if requested limit sigma_z values to that there aren't super bright guys.
-        min_sigma_z = 0
+        min_sigma_z = 1
         if diffraction_limit:
             min_sigma_z = 0.5 * zscaling / mag
 

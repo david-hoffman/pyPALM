@@ -56,12 +56,12 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     if blob_thresh is None:
         blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10 * subsampling)
     pf.blobs = pf.blobs[pf.blobs[:, 3] > blob_thresh]
-    if diagnostics:
-        pf.plot_blobs(**kwargs)
-        pf.plot_blob_grid(window=int(7 / subsampling), **kwargs)
     if not pf.blobs.size:
         # still no blobs then raise error
         raise RuntimeError("No blobs found!")
+    if diagnostics:
+        pf.plot_blobs(**kwargs)
+        pf.plot_blob_grid(window=int(7 / subsampling), **kwargs)
     if pf.blobs[:, 3].max() < num_frames * subsampling / 2:
         logger.warn("Drift maybe too high to find fiducials localizations = {}, num_frames = {}".format(pf.blobs[:, 3].max(), num_frames))
     # correct positions for subsampling
