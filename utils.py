@@ -133,7 +133,13 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
     y = df.good
 
     default_kwargs = dict(
-        learning_rate=0.1, n_estimators=1000, max_depth=10, min_child_weight=20, subsample=0.8, n_jobs=-1
+        learning_rate=0.1,
+        n_estimators=1000,
+        max_depth=10,
+        min_child_weight=20,
+        subsample=0.8,
+        tree_method='exact',
+        n_jobs=-1
     )
 
     # update with user parameters

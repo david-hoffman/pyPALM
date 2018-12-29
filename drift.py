@@ -107,6 +107,10 @@ def clean_fiducials(fiducials_dfs, order="amp", ascending=False, radius=None, zr
     return clean_fiducials
 
 
+def calc_residual_drift(fid_df_list):
+    return pd.concat([fid[coords] - fid[coords].mean() for fid in fid_df_list], ignore_index=True).std()
+
+
 def calc_fiducial_stats(fid_df_list, diagnostics=False, yx_pix_size=130, z_pix_size=1):
     """Calculate various stats"""
     
