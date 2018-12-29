@@ -7,14 +7,53 @@ All code related to drift correction of PALM data
 Copyright (c) 2017, David Hoffman
 """
 import os
+import tqdm
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 import dask
 import tempfile
 # get a logger
 import logging
 logger = logging.getLogger(__name__)
+
+
+def calculate_zscaling(data, diagnostics=False):
+    """Calculate the zscaling of the data"""
+    # look at ratio of axial extent to lateral extent of gaussian clouds
+    aspect = data.sigma_z / np.sqrt((data[["sigma_x", "sigma_y"]]**2).sum(1))
+    median = aspect.median()
+    if diagnostics:
+        fig, ax = plt.subplots()
+        aspect[aspect < aspect.quantile(0.99)].hist(bins="auto", density=True, ax=ax)
+        ax.axvline(median, c="C1")
+    return median
+
+
+def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=None, quantiles=(0.9, 0.99, 0.999)):
+    """Estimate the correct grouping radius from the data, assumes that `df` is the result of
+    a single pass group (grouping contiguous--in time--localizations)"""
+    # do you want to include z in the analysis?
+    if zscaling is None:
+        sigma_r = np.sqrt((df[["sigma_x", "sigma_y"]]**2).sum(1))
+    else:
+        sigma_r = np.sqrt((df[["sigma_x", "sigma_y"]]**2).sum(1) + (df.sigma_z / zscaling)**2)
+
+    # generate boot strap samples
+    boot_strap = []
+    for i in tqdm.tqdm_notebook(range(boot_samples)):
+        # sample from sigma_r distribution and make fake point cloud
+        sample = sigma_r.sample(sample_size, replace=True) * np.random.randn(sample_size)
+        # remove mean bias
+        sample = sample - sample.mean()
+        # take absolute value (single sided test)
+        sample = abs(sample)
+        # pick quantiles
+        boot_strap.append(sample.quantile(quantiles))
+
+    # return the median value of all boot strapped samples
+    return pd.DataFrame(boot_strap).median()
 
 
 def find_matches(frames, radius):
