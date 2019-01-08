@@ -23,33 +23,43 @@ def calculate_zscaling(data, diagnostics=False):
     """Calculate the zscaling of the data"""
     # look at ratio of axial extent to lateral extent of gaussian clouds
     aspect = data.sigma_z / np.sqrt((data[["sigma_x", "sigma_y"]]**2).sum(1))
+    aspect = aspect[(aspect < aspect.quantile(0.999)) & (aspect > aspect.quantile(1 - 0.999))]
     median = aspect.median()
     if diagnostics:
-        fig, ax = plt.subplots()
-        aspect[aspect < aspect.quantile(0.99)].hist(bins="auto", density=True, ax=ax)
-        ax.axvline(median, c="C1")
+        fig, ax = plt.subplots(figsize=(5, 4))
+        aspect.hist(bins="auto", density=True, ax=ax, histtype="step", linewidth=1)
+        ax.axvline(median, c="C1", label="Median Ratio = {:.1f}".format(median), linewidth=3, linestyle="--")
+        ax.set_xlabel("Ratio of PSF Axial to Lateral Extent")
+        ax.yaxis.set_major_locator(plt.NullLocator())
+        ax.grid(False)
+        ax.legend()
     return median
 
 
-def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=None, quantiles=(0.9, 0.99, 0.999)):
+def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=None, drift=None, quantiles=(0.9, 0.99, 0.999)):
     """Estimate the correct grouping radius from the data, assumes that `df` is the result of
     a single pass group (grouping contiguous--in time--localizations)"""
+    if drift is not None:
+        # copy relevant parameters and add drift in quadrature
+        df = np.sqrt(df[["sigma_x", "sigma_y", "sigma_z"]]**2 + drift[["x0", "y0", "z0"]].values**2)
+    else:
+        df = df[["sigma_x", "sigma_y", "sigma_z"]]
+
     # do you want to include z in the analysis?
     if zscaling is None:
-        sigma_r = np.sqrt((df[["sigma_x", "sigma_y"]]**2).sum(1))
+        # if so scale sigma_z
+        df = df[["sigma_x", "sigma_y", "sigma_z"]] / (1, 1, zscaling)
     else:
-        sigma_r = np.sqrt((df[["sigma_x", "sigma_y"]]**2).sum(1) + (df.sigma_z / zscaling)**2)
+        df = df[["sigma_x", "sigma_y"]]
 
     # generate boot strap samples
     boot_strap = []
     for i in tqdm.tqdm_notebook(range(boot_samples)):
-        # sample from sigma_r distribution and make fake point cloud
-        sample = sigma_r.sample(sample_size, replace=True) * np.random.randn(sample_size)
-        # remove mean bias
-        sample = sample - sample.mean()
-        # take absolute value (single sided test)
-        sample = abs(sample)
-        # pick quantiles
+        # Make fake 2D / 3D point cloud
+        sample = df.sample(sample_size, replace=True) * np.random.randn(sample_size, len(df.columns))
+        # calculate r for each point
+        sample = np.sqrt((sample ** 2).sum(1))
+        # pick quantiles of r
         boot_strap.append(sample.quantile(quantiles))
 
     # return the median value of all boot strapped samples
