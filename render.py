@@ -461,7 +461,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
     else:
         # if requested limit sigma_z values to that there aren't super bright guys.
         min_sigma_z = 1
-        if diffraction_limit:
+        if diffraction_limit and zscaling is not None:
             min_sigma_z = 0.5 * zscaling / mag
 
         # here want to weight by sigma_z just like we do with sigmas when generating the gaussians
