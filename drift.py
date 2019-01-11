@@ -74,11 +74,10 @@ def extract_fiducials(df, blobs, radius, diagnostics=False):
     We're doing it sequentially because we may run out of memory.
     If initial DataFrame is 18 GB (1 GB per column) and we have 200 """
     if diagnostics:
-        pipe = None
-    else:
-        pipe = io.StringIO()
+        # turn blobs into tqdm generator instead
+        blobs = tqdm.tqdm_notebook(blobs, desc="Extracting Fiducials")
     fiducials_dfs = [df[np.sqrt((df.x0 - x) ** 2 + (df.y0 - y) ** 2) < radius]
-                     for y, x in tqdm.tqdm(blobs, leave=False, desc="Extracting Fiducials", file=pipe)]
+                     for y, x in blobs]
     return fiducials_dfs
 
 

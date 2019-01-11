@@ -460,7 +460,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
             return dask.array.from_delayed(lazy_result, np.array(yx_shape) * mag, np.float)
     else:
         # if requested limit sigma_z values to that there aren't super bright guys.
-        min_sigma_z = 1
+        min_sigma_z = 1 / np.sqrt(2 * np.pi)
         if diffraction_limit and zscaling is not None:
             min_sigma_z = 0.5 * zscaling / mag
 

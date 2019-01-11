@@ -41,13 +41,15 @@ def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=No
     a single pass group (grouping contiguous--in time--localizations)"""
     if drift is not None:
         # copy relevant parameters and add drift in quadrature
+        logger.debug("using drift")
         df = np.sqrt(df[["sigma_x", "sigma_y", "sigma_z"]]**2 + drift[["x0", "y0", "z0"]].values**2)
     else:
         df = df[["sigma_x", "sigma_y", "sigma_z"]]
 
     # do you want to include z in the analysis?
-    if zscaling is None:
+    if zscaling is not None:
         # if so scale sigma_z
+        logger.debug("using zscaling")
         df = df[["sigma_x", "sigma_y", "sigma_z"]] / (1, 1, zscaling)
     else:
         df = df[["sigma_x", "sigma_y"]]
