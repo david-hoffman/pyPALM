@@ -657,7 +657,7 @@ def propogate_transforms(regs, initial=None):
 
 def apply_transform_to_slab(s, B, t, copy=True):
     """Apply a given transform to a slab"""
-    coords = ["x0", "y0", "z0"]
+    coords = ["x0", "y0", "z0"][:len(B)]
     # copy slab so as to not change original.
     if copy:
         s2 = s.copy()

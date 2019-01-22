@@ -31,7 +31,9 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     The key here is to realize that there should be on fiducial per frame"""
     # incase we subsample the frame number
     num_frames = df.frame.max() - df.frame.min()
+    logger.debug("num_frames = {}".format(num_frames))
     hist_2d = palm_hist(df, yx_shape, subsampling)
+    logger.debug("subsampling = {}".format(subsampling))
     pf = PeakFinder(hist_2d.astype(int), 1 / subsampling)
     # no blobs found so try again with a lower threshold
     pf.thresh = threshold
@@ -47,15 +49,19 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
         except TypeError:
             # only one value
             pf.blob_sigma = sigmas
+    logger.debug("bkwargs = {}".format(bkwargs))
     pf.find_blobs(**bkwargs)
     # need to recalculate the "amplitude" in a more inteligent way for
     # these types of data, in this case we want to take the sum over a small box
     # area
-    amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),) * 2)].sum() for y, x, s, a in pf.blobs])
-    pf._blobs[:, 3] = amps
+    blobs = pf.blobs
+    amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),) * 2)].sum() for y, x, s, a in blobs])
+    logger.debug("amps = {}".format(amps))
+    blobs[:, 3] = amps
     if blob_thresh is None:
-        blob_thresh = max(threshold_otsu(pf.blobs[:, 3]), num_frames / 10 * subsampling)
-    pf.blobs = pf.blobs[pf.blobs[:, 3] > blob_thresh]
+        blob_thresh = max(threshold_otsu(blobs[:, 3]), num_frames / 10 * subsampling)
+    logger.debug("blob_thresh = {}".format(blob_thresh))
+    pf.blobs = blobs[blobs[:, 3] > blob_thresh]
     if not pf.blobs.size:
         # still no blobs then raise error
         raise RuntimeError("No blobs found!")
@@ -65,7 +71,9 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     if pf.blobs[:, 3].max() < num_frames * subsampling / 2:
         logger.warn("Drift maybe too high to find fiducials localizations = {}, num_frames = {}".format(pf.blobs[:, 3].max(), num_frames))
     # correct positions for subsampling
-    return pf.blobs[:, :2] * subsampling
+    fid_locs = pf.blobs[:, :2] * subsampling
+    logger.debug("fid_locs = {}".format(fid_locs))
+    return fid_locs
 
 
 def extract_fiducials(df, blobs, radius, diagnostics=False):
