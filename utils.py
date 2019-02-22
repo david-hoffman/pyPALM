@@ -44,6 +44,9 @@ def crop(df, window, shift=False):
     >>> window = dict(x0=(200, 800), y0=(700, 900))
     >>> df_cropped = crop(df, window, True)
     """
+    if not window:
+        # if window is empty pass DataFrame through.
+        return df
     # set up our filter DataFrame
     df_filter = None
     # iterate through the window dict
@@ -122,7 +125,7 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
         # we want to use all columns, so that we can take into account groupsize
         feature_cols = list(df_in.columns)
         # but should be agnostic to position, (may want to leave in z0 if doing it on a slab by slab basis)
-        for col in ("x0", "y0", "z0", "frame", "group_id"):
+        for col in ("x0", "y0", "z0", "frame", "group_id", "slab_num"):
             try:
                 feature_cols.remove(col)
             except ValueError:
