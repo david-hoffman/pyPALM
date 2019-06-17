@@ -21,6 +21,21 @@ logger = logging.getLogger(__name__)
 coords = ["z0", "y0", "x0"]
 
 
+def xywh_to_crop(x, y, w, h):
+    return dict(x0=(x, x + w), y0=(y, y + h))
+
+
+def build_query(window):
+    """Build a pandas compatible query from a dictionary"""
+    query_list = [
+        "({coord:} {op:} {c:})".format(coord=coord, op=op, c=c)
+        for coord, (cmin, cmax) in window.items()
+        for c, op in zip((cmin, cmax), "><")
+    ]
+    query = " & ".join(query_list)
+    logger.debug('Query = "{}"'.format(query))
+    return query
+
 def crop(df, window, shift=False):
     """Crop a palm dataframe
 
@@ -47,26 +62,26 @@ def crop(df, window, shift=False):
     if not window:
         # if window is empty pass DataFrame through.
         return df
-    # set up our filter DataFrame
-    df_filter = None
-    # iterate through the window dict
-    all_coords = []
-    cmins = []
-    for coord, (cmin, cmax) in window.items():
-        df_coord = df[coord]
-        if df_filter is None:
-            df_filter = df_coord > cmin
-        else:
-            df_filter &= df_coord > cmin
-        df_filter &= df_coord < cmax
-        if coord in coords:
+    # filter our DataFrame
+    new_df = df.query(build_query(window))
+    if shift:
+        # iterate through the window dict
+        all_coords = []
+        cmins = []
+        for coord in coords:
             # only use coordinates for shifting
+            try:
+                cmin = window[coord][0]
+            except KeyError:
+                continue
             all_coords.append(coord)
             cmins.append(cmin)
-            
-    new_df = df[df_filter]
-    if shift:
-        new_df.loc[:, all_coords] -= cmins
+
+        # sanity check
+        assert len(all_coords) == len(cmins), "Something fucked"
+        if all_coords:
+            # if there's anything to shift shift it.
+            new_df.loc[:, all_coords] -= cmins
     return new_df
 
 
