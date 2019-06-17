@@ -486,7 +486,8 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         img_wz_g = func(wz[:, 1])
         img_wz_b = func(wz[:, 2])
         # combine the images and divide by weights to get a depth-coded RGB image
-        rgb = dask.array.dstack((img_wz_r, img_wz_g, img_wz_b)) / img_w[..., None]
+        with np.errstate(divide="ignore"):
+            rgb = dask.array.dstack((img_wz_r, img_wz_g, img_wz_b)) / img_w[..., None]
         # where weight is 0, replace with 0
         rgb[~np.isfinite(rgb)] = 0
         # add on the alpha img
