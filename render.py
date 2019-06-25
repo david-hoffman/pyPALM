@@ -216,53 +216,6 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
             # Shift these points one bin to the left.
             Ncount[i][np.where(on_edge & not_smaller_than_edge)[0]] -= 1
 
-    # Flattened histogram matrix (1D)
-    # Reshape is used so that overlarge arrays
-    # will raise an error.
-    # hist = zeros(nbin, float).reshape(-1)
-
-    # # Compute the sample indices in the flattened histogram matrix.
-    # ni = nbin.argsort()
-    # xy = zeros(N, int)
-    # for i in arange(0, D-1):
-    #     xy += Ncount[ni[i]] * nbin[ni[i+1:]].prod()
-    # xy += Ncount[ni[-1]]
-
-    # # Compute the number of repetitions in xy and assign it to the
-    # # flattened histmat.
-    # if len(xy) == 0:
-    #     return zeros(nbin-2, int), edges
-
-    # flatcount = bincount(xy, weights)
-    # a = arange(len(flatcount))
-    # hist[a] = flatcount
-
-    # # Shape into a proper matrix
-    # hist = hist.reshape(sort(nbin))
-    # for i in arange(nbin.size):
-    #     j = ni.argsort()[i]
-    #     hist = hist.swapaxes(i, j)
-    #     ni[i], ni[j] = ni[j], ni[i]
-
-    # # Remove outliers (indices 0 and -1 for each dimension).
-    # core = D*[slice(1, -1)]
-    # hist = hist[core]
-
-    # # Normalize if normed is True
-    # if normed:
-    #     s = hist.sum()
-    #     for i in arange(D):
-    #         shape = ones(D, int)
-    #         shape[i] = nbin[i] - 2
-    #         hist = hist / dedges[i].reshape(shape)
-    #     hist /= s
-
-    # if (hist.shape != nbin - 2).any():
-    #     raise RuntimeError(
-    #         "Internal Shape Error")
-    # for n in Ncount:
-    #     print(n.shape)
-    #     print(n.dtype)
     if weights is not None:
         weights = np.asarray(weights)
         hist = jit_hist3d_with_weights(*Ncount, weights=weights, shape=shape)
@@ -372,43 +325,28 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
 _jit_gen_img_sub = njit(_gen_img_sub, nogil=True)
 
 
-# @pdiag.dask.delayed
-# def _gen_img_sub_thread(chunklen, chunk, yx_shape, df, mag, multipliers, diffraction_limit):
-#     """"""
-#     s = slice(chunk * chunklen, (chunk + 1) * chunklen)
-#     df_chunk = df[["y0", "x0", "sigma_y", "sigma_x"]].values[s]
-#     # calculate the amplitude of the z gaussian.
-#     amps = multipliers[s]
-#     # generate a 2D image weighted by the z gaussian.
-#     return pdiag._jit_gen_img_sub(yx_shape, df_chunk, mag, amps, diffraction_limit)
-
-
-# def _gen_img_sub_threaded(yx_shape, df, mag, multipliers, diffraction_limit, numthreads=1):
-#     """"""
-#     length = len(df)
-#     chunklen = (length + numthreads - 1) // numthreads
-#     new_shape = tuple(np.array(yx_shape) * mag)
-#     # print(dask.array.from_delayed(_gen_zplane(df, yx_shape, zplanes[0], mag), new_shape, np.float))
-#     rendered_threads = [pdiag.dask.array.from_delayed(
-#         _gen_img_sub_thread(chunklen, chunk, yx_shape, df, mag, multipliers, diffraction_limit), new_shape, np.float)
-#                         for chunk in range(numthreads)]
-#     lazy_result = pdiag.dask.array.stack(rendered_threads)
-#     return lazy_result.sum(0)
-
 def _gen_img_sub_threaded(yx_shape, df, mag, multipliers, diffraction_limit, numthreads=1):
     keys_for_render = ["y0", "x0", "sigma_y", "sigma_x"]
-    df = df[keys_for_render].values
-    length = len(df)
-    chunklen = (length + numthreads - 1) // numthreads
-    # Create argument tuples for each input chunk
-    df_chunks = [df[i * chunklen:(i + 1) * chunklen] for i in range(numthreads)]
-    mult_chunks = [multipliers[i * chunklen:(i + 1) * chunklen] for i in range(numthreads)]
-    delayed_jit_gen_img_sub = dask.delayed(_jit_gen_img_sub)
-    lazy_result = [delayed_jit_gen_img_sub(yx_shape, df_chunk, mag, mult, diffraction_limit)
-                   for df_chunk, mult in zip(df_chunks, mult_chunks)]
-    lazy_result = dask.array.stack(
-        [dask.array.from_delayed(l, np.array(yx_shape) * mag, np.float) for l in lazy_result])
-    return lazy_result.sum(0)
+    df = df[keys_for_render].to_numpy()
+    new_shape = np.array(yx_shape) * mag
+
+    @dask.delayed
+    def delayed_jit_gen_img_sub(chunk):
+        return _jit_gen_img_sub(yx_shape, df[chunk], mag, multipliers[chunk], diffraction_limit)
+
+    if numthreads > 1:
+        length = len(df)
+        chunklen = (length + numthreads - 1) // numthreads
+        chunks = [slice(i * chunklen, (i + 1) * chunklen) for i in range(numthreads)]
+        # Create argument tuples for each input chunk
+        chunked_results = [dask.array.from_delayed(delayed_jit_gen_img_sub(chunk), new_shape, np.float) for chunk in chunks]
+        lazy_result = dask.array.stack(chunked_results)
+    else:
+        lazy_result = dask.array.from_delayed(
+                delayed_jit_gen_img_sub(slice(None)),
+                new_shape, np.float
+                )
+    return lazy_result
 
 
 def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0", zscaling=5 * 130):
@@ -486,16 +424,23 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         img_wz_g = func(wz[:, 1])
         img_wz_b = func(wz[:, 2])
         # combine the images and divide by weights to get a depth-coded RGB image
-        with np.errstate(divide="ignore"):
-            rgb = dask.array.dstack((img_wz_r, img_wz_g, img_wz_b)) / img_w[..., None]
+        darr = dask.array.stack((img_wz_r, img_wz_g, img_wz_b, img_w)).compute()
+        if darr.ndim > 3:
+            darr = darr.sum(1)
+        img_wz_r, img_wz_g, img_wz_b, img_w = darr
+        with np.errstate(invalid="ignore"):
+            rgb = np.dstack((img_wz_r, img_wz_g, img_wz_b)) / img_w[..., None]
         # where weight is 0, replace with 0
         rgb[~np.isfinite(rgb)] = 0
         # add on the alpha img
-        rgba = dask.array.dstack((rgb, img_w))
-        return DepthCodedImage(rgba.compute(), cmap, mag, (df[colorcode].min(), df[colorcode].max()))
+        rgba = np.dstack((rgb, img_w))
+        return DepthCodedImage(rgba, cmap, mag, (df[colorcode].min(), df[colorcode].max()))
     else:
         # just return the alpha.
-        return img_w.compute()
+        img_w = img_w.compute()
+        if img_w.ndim > 2:
+            img_w = img_w.sum(0)
+        return img_w
 
 
 def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
@@ -755,22 +700,6 @@ class DepthCodedImage(np.ndarray):
         return fig, ax
 
 
-@dask.delayed
-def _gen_zplane(yx_shape, df, zplane, mag, diffraction_limit):
-    """A subfunction to generate a single z plane"""
-    # again a hard coded radius
-    radius = 5
-    # find the fiducials worth rendering
-    df_zplane = df[np.abs(df.z0 - zplane) < df.sigma_z * radius]
-    # calculate the amplitude of the z gaussian.
-    amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (np.sqrt(2 * np.pi) * df_zplane.sigma_z)
-    # generate a 2D image weighted by the z gaussian.
-    toreturn = _jit_gen_img_sub(yx_shape, df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values, mag, amps.values, diffraction_limit)
-    # remove all temporaries
-    gc.collect()
-    return toreturn
-
-
 def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
     """Generate a 3D image with gaussian point clouds
 
@@ -798,8 +727,25 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
         df = df[["z0", "y0", "x0", "sigma_z", "sigma_y", "sigma_x"]]
         # set min sigma_z to half min zspacing
         df.sigma_z = np.fmax(zspacing * 0.5, df.sigma_z)
+
+    @dask.delayed
+    def _gen_zplane(zplane):
+        """A subfunction to generate a single z plane"""
+        # again a hard coded radius
+        radius = 5
+        # find the fiducials worth rendering
+        df_zplane = df[np.abs(df.z0 - zplane) < df.sigma_z * radius]
+        # calculate the amplitude of the z gaussian.
+        amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (np.sqrt(2 * np.pi) * df_zplane.sigma_z)
+        # generate a 2D image weighted by the z gaussian.
+        toreturn = _jit_gen_img_sub(yx_shape, df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values, mag, amps.values, diffraction_limit)
+        # remove all temporaries
+        del df_zplane
+        del amps
+        gc.collect()
+        return toreturn
     # Build delayed array
-    rendered_planes = [dask.array.from_delayed(_gen_zplane(yx_shape, df, zplane, mag, diffraction_limit), new_shape, np.float)
+    rendered_planes = [dask.array.from_delayed(_gen_zplane(zplane), new_shape, np.float)
                        for zplane in zplanes]
     to_compute = dask.array.stack(rendered_planes)
     return to_compute.compute(num_workers=num_workers)
