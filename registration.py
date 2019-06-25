@@ -97,7 +97,8 @@ class BaseCPD(object):
             ax0.scatter(*self.TY.T[s], marker="o", c="b")
             ax0.scatter(*self.X.T[s], marker="x", c="r")
             ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot='tail')
-            ax0.set_aspect("equal")
+            if projection is None:
+                ax0.set_aspect("equal")
             ax0.set_title("RMSE = {:.3f}, i = {}\ntvec = {}".format(self.rmse, self.iteration, self.translation))
         else:
             fig, ax1 = plt.subplots(1)
@@ -107,10 +108,13 @@ class BaseCPD(object):
         ax1.set_aspect("auto")
         ax1.set_title("Num pnts = {}, numcorr = {}".format(len(self.TY), (self.p_old > self.w).sum()))
         return fig, axs
+
+    def transform(self, other):
+        return other @ self.B.T + self.translation
     
     def updateTY(self):
         """Update the transformed point cloud and distance matrix"""
-        self.TY = self.Y @ self.B.T + self.translation
+        self.TY = self.transform(self.Y)
         # we need to update the distance matrix too
         # This gives us a matrix of ||x - T(y)||**2, eq (1)
         # But we want the rows to be m and columns n
@@ -450,6 +454,15 @@ model_dict = {
 }
 
 
+def choose_model(model):
+    """Choose model if string"""
+    if isinstance(model, str):
+        model = model_dict[model.lower()]
+    elif not issubclass(model, BaseCPD):
+        raise ValueError("Model {} is not recognized".format(model))
+    return model
+
+
 def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
     """Automatically determine the weight to use in the CPD algorithm
 
@@ -475,10 +488,7 @@ def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
 
     """
     # test inputs
-    if isinstance(model, str):
-        model = model_dict[model.lower()]
-    elif not issubclass(model, BaseCPD):
-        raise ValueError("Model {} is not recognized".format(model))
+    model = choose_model(model)
 
     try:
         # the user has passed low and high limits
@@ -517,38 +527,58 @@ def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
     return reg
 
 
-def auto_align(X_df, Y_df, model, *args, CPD_secondstep=True, keepclosest=None, **kwargs):
-    """Auto align by aligning 2D first then aligning the 3D matches"""
-    if isinstance(model, str):
-        model = model_dict[model.lower()]
-    elif not issubclass(model, BaseCPD):
-        raise ValueError("Model {} is not recognized".format(model))
+def nearest_neighbors(fids0, fids1, r=100, transform=lambda x: x, coords=["x0", "y0"]):
+    # find nearest neighbors in both sets
+    idx00, idx01 = closest_point_matches(fids0[coords].values, transform(fids1[coords].values), r=r)
+    idx11, idx10 = closest_point_matches(transform(fids1[coords].values), fids0[coords].values, r=r)
+    fids0_filt = fids0.iloc[idx10]
+    fids1_filt = fids1.iloc[idx01]
+    idx0, idx1 = closest_point_matches(fids0_filt[coords].values, transform(fids1_filt[coords].values), r=r)
+    return fids0_filt.iloc[idx0], fids1_filt.iloc[idx1]
 
-    s_2d = ["x0", "y0"]
-    s_3d = s_2d + ["z0"]
-    reg_2d = auto_weight(X_df[s_2d].values, Y_df[s_2d].values, model, *args, **kwargs)
-    print(reg_2d.w)
-    reg_2d.plot()
-    if keepclosest is None:
-        xidx, yidx = reg_2d.matches
-    else:
-        xidx, yidx = closest_point_matches(reg_2d.X, reg_2d.TY, r=keepclosest)
-    if not len(xidx) or not len(yidx):
-        print(xidx, yidx)
-        raise RuntimeError("No matches found")
-    # is this good enought to determine one to one mapping?
-    uxidx = np.unique(xidx)
-    uyidx = np.unique(yidx)
-    if CPD_secondstep or len(xidx) != len(uxidx) or len(yidx) != len(uyidx) or len(uxidx) != len(uyidx):
-        # only use unique indices
-        reg_2d_3d = auto_weight(X_df[s_3d].values[uxidx], Y_df[s_3d].values[uyidx], model, *args, **kwargs)
-    else:
-        # use correspondences directly
-        print("estimating")
-        reg_2d_3d = model(X_df[s_3d].values[xidx], Y_df[s_3d].values[yidx])
-        reg_2d_3d.estimate()
 
-    return reg_2d_3d, reg_2d
+def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation", dz=250, zscaling=500):
+    """Align two slabs fiducials, assumes that z coordinate has been normalized"""
+    model = choose_model(model)
+    transform = lambda x: x
+    rmse = 50
+    for i in range(100):
+        fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(rmse * 2, 5), transform=transform)
+        reg = model(fids0_filt[["x0", "y0"]].values, fids1_filt[["x0", "y0"]].values)
+        try:
+            reg.estimate()
+        except ValueError:
+            reg(weight=0.05)
+        transform = reg.transform
+        if reg.rmse < atol or (rmse - reg.rmse) / rmse < rtol:
+            break
+        rmse = reg.rmse
+    else:
+        logger.error("2D Failed")
+
+    if diagnostics:
+        reg.plot()
+
+    reg.translation = np.concatenate((reg.translation, np.array((-dz / zscaling)).reshape(1, 1)), axis=-1)
+    reg.B = np.eye(3)
+    for i in range(100):
+        fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(2 * rmse, 1), transform=transform, coords=["x0", "y0", "z0"])
+        reg = model(fids0_filt[["x0", "y0", "z0"]].values, fids1_filt[["x0", "y0", "z0"]].values)
+        try:
+            reg.estimate()
+        except ValueError:
+            reg(weight=0.05)
+        transform = reg.transform
+        if reg.rmse < atol or (rmse - reg.rmse) / rmse < rtol:
+            break
+        rmse = reg.rmse
+    else:
+        raise logger.error("3D Failed, rmse = {}, rel = {}, i = {}".format(reg.rmse, (rmse - reg.rmse) / rmse, i)) 
+    
+    if diagnostics:
+        reg.plot()
+    
+    return reg
 
 
 def closest_point_matches(X, Y, method="tree", **kwargs):
@@ -594,13 +624,13 @@ def _keepclosestbrute(X, Y, r=10, percentile=None):
 
 def _keepclosesttree(X, Y, r=10):
     # build the trees
-    xtree = spatial.cKDTree(X)
     ytree = spatial.cKDTree(Y)
-    # find neighbors within radius r
-    l = xtree.query_ball_tree(ytree, r)
-    # extract from matches
-    ypoints = np.array(list(itertools.chain.from_iterable(l)))
-    xpoints = np.array([i for i, ll in enumerate(l) if len(ll)])
+    # find nearest neighbors to each point in X in Y, ii are the indices of ytree that match X
+    dd, ii = ytree.query(X)
+    # filter
+    filt = dd < r
+    xpoints = np.arange(len(X))[filt]
+    ypoints = ii[filt]
     # check for duplicate indexs
     uypoints = np.unique(ypoints)
     uxpoints = np.unique(xpoints)
@@ -652,6 +682,7 @@ def propogate_transforms(regs, initial=None):
         B, t = from_augmented(aug_B2)
         Bs.append(B)
         ts.append(t)
+
     return Bs, ts
 
 
