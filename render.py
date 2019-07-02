@@ -241,7 +241,7 @@ _jit_gauss = njit(_gauss, nogil=True)
 def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
     # hard coded radius, this is really how many sigmas you want
     # to use to render each gaussian
-    radius = 5
+    radius = 3
 
     # initialize the image
     ymax = int(yx_shape[0] * mag)
@@ -700,7 +700,7 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
     def _gen_zplane(zplane):
         """A subfunction to generate a single z plane"""
         # again a hard coded radius
-        radius = 5
+        radius = 3
         # find the fiducials worth rendering
         df_zplane = df[np.abs(df.z0 - zplane) < df.sigma_z * radius]
         # calculate the amplitude of the z gaussian.
