@@ -224,37 +224,12 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
     return hist, edges
 
 ### Gaussian Rendering
-_jit_calc_pad = njit(_calc_pad, nogil=True)
-
-
-@njit(nogil=True)
-def _jit_slice_maker(xs1, ws1):
-    """Modified from the version in dphutils to allow jitting"""
-    if np.any(ws1 < 0):
-        raise ValueError("width cannot be negative")
-    # ensure integers
-    xs = np.rint(xs1).astype(np.int32)
-    ws = np.rint(ws1).astype(np.int32)
-    # use _calc_pad
-    toreturn = []
-    for x, w in zip(xs, ws):
-        half2, half1 = _jit_calc_pad(0, w)
-        xstart = x - half1
-        xend = x + half2
-        assert xstart <= xend, "xstart > xend"
-        if xend <= 0:
-            xstart, xend = 0, 0
-        # the max calls are to make slice_maker play nice with edges.
-        toreturn.append((max(0, xstart), xend))
-    # return a list of slices
-    return toreturn
-
-
 def _gauss(yw, xw, y0, x0, sy, sx):
     """Simple normalized 2D gaussian function for rendering"""
     # for this model, x and y are seperable, so we can generate
     # two gaussians and take the outer product
-    y, x = np.arange(yw), np.arange(xw)
+    y = np.arange(yw)
+    x = np.arange(xw)
     amp = 1 / (2 * np.pi * sy * sx)
     gy = np.exp(-((y - y0) / sy) ** 2 / 2)
     gx = np.exp(-((x - x0) / sx) ** 2 / 2)
@@ -264,62 +239,55 @@ _jit_gauss = njit(_gauss, nogil=True)
 
 
 def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
-    """A sub function for actually rendering the images
-    Some of the structure is not really 'pythonic' but its to allow JIT compilation
-
-    Parameters
-    ----------
-    yx_shape : tuple
-        The shape overwhich to render the scene
-    params : ndarray (M x N)
-        An array containing M localizations with data ordered as
-        y0, x0, sigma_y, sigma_x
-    mag : int
-        The magnification factor to render the scene
-    multipliers : array (M) optional
-        an array of multipliers so that you can do weigthed averages
-        mainly to be used for depth coded MIPs
-    diffraction_limit : bool
-        Controls whether or not there is a lower limit for the localization precision
-        This can have better smoothing.
-
-    Returns
-    -------
-    img : ndarray
-        The rendered image
-    """
     # hard coded radius, this is really how many sigmas you want
     # to use to render each gaussian
     radius = 5
-    yw, xw = yx_shape
+
     # initialize the image
-    img = np.zeros((int(yw * mag), int(xw * mag)))
+    ymax = int(yx_shape[0] * mag)
+    xmax = int(yx_shape[1] * mag)
+    img = np.zeros((ymax, xmax))
     # iterate through all localizations
     for i in range(len(params)):
         if not np.isfinite(params[i]).all():
             # skip nans
             continue
-        # pull parameters
-        y0, x0, sy, sx = params[i]
-        # adjust to new magnification
-        y0, x0, sy, sx = np.array((y0, x0, sy, sx)) * mag
+        # pull parameters adjust to new magnification (Numba requires that we expand this out, explicitly)
+        y0 = params[i, 0] * mag
+        x0 = params[i, 1] * mag
+        sy = params[i, 2] * mag
+        sx = params[i, 3] * mag
+        # adjust parameters if diffraction limit is requested
         if diffraction_limit:
-            sy, sx = max(sy, 0.5), max(sx, 0.5)
+            sy = max(sy, 0.5)
+            sx = max(sx, 0.5)
         # calculate the render window size
-        width = np.array((sy, sx)) * radius * 2
+        wy = int(sy * radius * 2.0)
+        wx = int(sx * radius * 2.0)
         # calculate the area in the image
-        (ystart, yend), (xstart, xend) = _jit_slice_maker(np.array((y0, x0)), width)
+        ystart = int(np.rint(y0)) - wy // 2
+        yend = ystart + wy
+        xstart = int(np.rint(x0)) - wx // 2
+        xend = xstart + wx
+        # don't go over the edge
+        yend = min(yend, ymax)
+        ystart = max(ystart, 0)
+        xend = min(xend, xmax)
+        xstart = max(xstart, 0)
+        wy = yend - ystart
+        wx = xend - xstart
+        if wy == 0 or wx == 0:
+            continue
         # adjust coordinates to window coordinates
-        y0 -= ystart
-        x0 -= xstart
+        y1 = y0 - ystart
+        x1 = x0 - xstart
         # generate gaussian
-        g = _jit_gauss((yend - ystart), (xend - xstart), y0, x0, sy, sx)
+        g = _jit_gauss(wy, wx, y1, x1, sy, sx)
         # weight if requested
         if len(multipliers):
             g *= multipliers[i]
         # update image
         img[ystart:yend, xstart:xend] += g
-
     return img
 
 _jit_gen_img_sub = njit(_gen_img_sub, nogil=True)
