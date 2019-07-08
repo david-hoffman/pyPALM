@@ -262,13 +262,16 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
             sy = max(sy, 0.5)
             sx = max(sx, 0.5)
         # calculate the render window size
-        wy = int(sy * radius * 2.0)
-        wx = int(sx * radius * 2.0)
+        wy = int(np.rint(sy * radius * 2.0))
+        wx = int(np.rint(sx * radius * 2.0))
         # calculate the area in the image
         ystart = int(np.rint(y0)) - wy // 2
         yend = ystart + wy
         xstart = int(np.rint(x0)) - wx // 2
         xend = xstart + wx
+        if yend <= 0 or xend <= 0:
+            # make sure we have nothing negative
+            continue
         # don't go over the edge
         yend = min(yend, ymax)
         ystart = max(ystart, 0)
@@ -276,7 +279,8 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
         xstart = max(xstart, 0)
         wy = yend - ystart
         wx = xend - xstart
-        if wy == 0 or wx == 0:
+        if wy <= 0 or wx <= 0:
+            # make sure there is something to render
             continue
         # adjust coordinates to window coordinates
         y1 = y0 - ystart
@@ -293,31 +297,7 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
 _jit_gen_img_sub = njit(_gen_img_sub, nogil=True)
 
 
-def _gen_img_sub_threaded(yx_shape, df, mag, multipliers, diffraction_limit, numthreads=1):
-    keys_for_render = ["y0", "x0", "sigma_y", "sigma_x"]
-    df = df[keys_for_render].to_numpy()
-    new_shape = np.array(yx_shape) * mag
-
-    @dask.delayed
-    def delayed_jit_gen_img_sub(chunk):
-        return _jit_gen_img_sub(yx_shape, df[chunk], mag, multipliers[chunk], diffraction_limit)
-
-    if numthreads > 1:
-        length = len(df)
-        chunklen = (length + numthreads - 1) // numthreads
-        chunks = [slice(i * chunklen, (i + 1) * chunklen) for i in range(numthreads)]
-        # Create argument tuples for each input chunk
-        chunked_results = [dask.array.from_delayed(delayed_jit_gen_img_sub(chunk), new_shape, np.float) for chunk in chunks]
-        lazy_result = dask.array.stack(chunked_results)
-    else:
-        lazy_result = dask.array.from_delayed(
-                delayed_jit_gen_img_sub(slice(None)),
-                new_shape, np.float
-                )
-    return lazy_result
-
-
-def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0", zscaling=5 * 130):
+def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0", zscaling=None):
     """Generate a 2D image, optionally with z color coding
 
     Parameters
@@ -328,7 +308,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         A DataFrame object containing localization data
     mag : int
         The magnification factor to render the scene
-    cmap : "hsv"
+    cmap : "gist_rainbow"
         The color coding for the z image, if set to None, only 2D
         will be rendered
     weight : str
@@ -349,40 +329,65 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         the last axis is RGBA. the A channel is just the intensity
         It will not have gamma or clipping applied.
     """
+
+    new_shape = np.array(yx_shape) * mag
+
+    # calculate the weighting for each localization
+    if weight is not None:
+        try:
+            w = df[weight].to_numpy()
+        except KeyError:
+            w = weight
+    else:
+        w = np.ones(len(df))
+
     if hist:
         # generate the bins for the histogram
         bins = [np.arange(0, dim + 1.0 / mag, 1 / mag) - 1 / mag / 2 for dim in yx_shape]
         # there's no weighting by amplitude or anything here
-        w = np.ones(len(df))
 
         def func(weights):
             """This is the histogram function"""
-
-            @dask.delayed
-            def lazy_hist(sample, bins=10, range=None, normed=False, weights=None):
-                return np.histogramdd(sample, bins, range, normed, weights)[0]
-
-            lazy_result = lazy_hist(df[["y0", "x0"]].values, bins, weights=weights)
-            return dask.array.from_delayed(lazy_result, np.array(yx_shape) * mag, np.float)
+            lazy_hist = dask.delayed(np.histogramdd)(
+                df[["y0", "x0"]].values,
+                bins=bins,
+                density=False,
+                weights=weights
+            )[0]
+            return lazy_hist
     else:
         # if requested limit sigma_z values to that there aren't super bright guys.
-        min_sigma_z = 1 / np.sqrt(2 * np.pi)
-        if diffraction_limit and zscaling is not None:
-            min_sigma_z = 0.5 * zscaling / mag
+        # min_sigma_z = 1 / np.sqrt(2 * np.pi)
+        # if diffraction_limit and zscaling is not None:
+        #     min_sigma_z = 0.5 * zscaling / mag
 
         # here want to weight by sigma_z just like we do with sigmas when generating the gaussians
-        w = 1 / (np.sqrt(2 * np.pi) * np.fmax(df["sigma_z"].values, min_sigma_z))
+        # w = 1 / (np.sqrt(2 * np.pi) * np.fmax(df["sigma_z"].values, min_sigma_z))
 
         def func(weights):
             """This is the gaussian renderer"""
-            return _gen_img_sub_threaded(yx_shape, df, mag, weights, diffraction_limit, numthreads)
+            keys_for_render = ["y0", "x0", "sigma_y", "sigma_x"]
+            df_arr = df[keys_for_render].values
+
+            @dask.delayed
+            def delayed_jit_gen_img_sub(chunk):
+                if chunk is not None:
+                    return _jit_gen_img_sub(yx_shape, df_arr[chunk], mag, weights[chunk], diffraction_limit)
+                return _jit_gen_img_sub(yx_shape, df_arr, mag, weights, diffraction_limit)
+
+            if numthreads > 1:
+                chunklen = (len(df) + numthreads - 1) // numthreads
+                chunks = [slice(i * chunklen, (i + 1) * chunklen) for i in range(numthreads)]
+                # Create argument tuples for each input chunk
+                lazy_result = [delayed_jit_gen_img_sub(chunk) for chunk in chunks]
+            else:
+                lazy_result = delayed_jit_gen_img_sub(None)
+
+            return lazy_result
 
     # Generate the intensity image
     img_w = func(w)
     if cmap is not None:
-        # calculate the weighting for each localization
-        if weight is not None:
-            w *= df[weight].values
         # normalize z into the range of 0 to 1
         norm_z = scale(df[colorcode].values)
         # Calculate weighted colors for each z position
@@ -391,11 +396,12 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         img_wz_r = func(wz[:, 0])
         img_wz_g = func(wz[:, 1])
         img_wz_b = func(wz[:, 2])
-        # combine the images and divide by weights to get a depth-coded RGB image
-        darr = dask.array.stack((img_wz_r, img_wz_g, img_wz_b, img_w)).compute()
+        # compute and rearrange
+        darr = np.asarray(dask.compute(img_wz_r, img_wz_g, img_wz_b, img_w))
         if darr.ndim > 3:
             darr = darr.sum(1)
         img_wz_r, img_wz_g, img_wz_b, img_w = darr
+        # combine the images and divide by weights to get a depth-coded RGB image
         with np.errstate(invalid="ignore"):
             rgb = np.dstack((img_wz_r, img_wz_g, img_wz_b)) / img_w[..., None]
         # where weight is 0, replace with 0
@@ -405,7 +411,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         return DepthCodedImage(rgba, cmap, mag, (df[colorcode].min(), df[colorcode].max()))
     else:
         # just return the alpha.
-        img_w = img_w.compute()
+        img_w = np.asarray(dask.compute(img_w))
         if img_w.ndim > 2:
             img_w = img_w.sum(0)
         return img_w
