@@ -56,7 +56,7 @@ def find_fiducials(df, yx_shape, subsampling=1, diagnostics=False, sigmas=None, 
     # area
     blobs = pf.blobs
     amps = np.array([pf.data[slice_maker((int(y), int(x)), (max(1, int(s * 5)),) * 2)].sum() for y, x, s, a in blobs])
-    logger.debug("amps = {}".format(amps))
+    logger.debug("{} amps = {}".format(len(amps), amps))
     blobs[:, 3] = amps
     if blob_thresh is None:
         blob_thresh = max(threshold_otsu(blobs[:, 3]), num_frames / 10 * subsampling)

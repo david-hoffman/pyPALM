@@ -233,12 +233,19 @@ class BaseCPD(object):
         # apply scale
         Sx = np.diag(self.scale_x)
         Sy = np.diag(self.scale_y)
+        Sx_1 = np.diag(1 / self.scale_x)
+        Sy_1 = np.diag(1 / self.scale_y)
         self.Y = self.Y @ Sy
         self.X = self.X @ Sx
+
+        self.translation = (self.ty @ self.B.T + self.translation - self.tx) @ Sx
+        self.B = Sx @ self.B @ Sy_1
 
     def unnorm_data(self):
         """Undo the intial normalization"""
         logger.debug("Undoing normalization")
+        logger.debug("tx = {}, ty = {}".format(self.tx, self.ty))
+        logger.debug("scale_x = {}, scale_y = {}".format(self.scale_x, self.scale_y))
         Sx = np.diag(self.scale_x)
         Sy = np.diag(self.scale_y)
         Sx_1 = np.diag(1 / self.scale_x)
@@ -440,7 +447,7 @@ class AffineCPD(BaseCPD):
         # we want to keep the extra dimension for translation
         translation = T[-1:, :D]
         # make sure that the solution makes sense (last column should be 1 | 0)
-        assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+        assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error\nT = {}\nX = {}\nY = {}".format(T, self.X, self.Y)
         self.B, self.translation = B, translation
 
 
@@ -537,48 +544,55 @@ def nearest_neighbors(fids0, fids1, r=100, transform=lambda x: x, coords=["x0", 
     return fids0_filt.iloc[idx0], fids1_filt.iloc[idx1]
 
 
-def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation", dz=250, zscaling=500):
+# def normed_rmse(reg):
+#     reg.norm_data()
+#     reg.updateTY()
+#     rmse = reg.rmse
+#     reg.unnorm_data()
+#     reg.updateTY()
+#     return rmse
+
+
+def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation", only2d=False, iters=100):
     """Align two slabs fiducials, assumes that z coordinate has been normalized"""
     model = choose_model(model)
-    transform = lambda x: x
-    rmse = 50
-    for i in range(100):
-        fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(rmse * 2, 5), transform=transform)
-        reg = model(fids0_filt[["x0", "y0"]].values, fids1_filt[["x0", "y0"]].values)
+
+    def register(fids0_filt, fids1_filt, coords):
+        reg = model(fids0_filt[coords].values, fids1_filt[coords].values)
         try:
             reg.estimate()
         except ValueError:
             reg(weight=0.05)
-        transform = reg.transform
-        if reg.rmse < atol or (rmse - reg.rmse) / rmse < rtol:
-            break
-        rmse = reg.rmse
-    else:
-        logger.error("2D Failed")
+        return reg
 
-    if diagnostics:
-        reg.plot()
+    def sub_func(rmse, transform, coords):
+        for i in range(iters):
+            fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(rmse * 2, 1), transform=transform, coords=coords)
+            reg = register(fids0_filt, fids1_filt, coords)
+            transform = reg.transform
+            rmse_new = reg.rmse
+            rmse_rel = (rmse - rmse_new) / rmse
+            if rmse_new < atol or rmse_rel < rtol:
+                break
+            rmse = rmse_new
+        else:
+            logger.error("{} failed, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i))
 
-    reg.translation = np.concatenate((reg.translation, np.array((-dz / zscaling)).reshape(1, 1)), axis=-1)
-    reg.B = np.eye(3)
-    for i in range(100):
-        fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(2 * rmse, 1), transform=transform, coords=["x0", "y0", "z0"])
-        reg = model(fids0_filt[["x0", "y0", "z0"]].values, fids1_filt[["x0", "y0", "z0"]].values)
-        try:
-            reg.estimate()
-        except ValueError:
-            reg(weight=0.05)
-        transform = reg.transform
-        if reg.rmse < atol or (rmse - reg.rmse) / rmse < rtol:
-            break
-        rmse = reg.rmse
-    else:
-        raise logger.error("3D Failed, rmse = {}, rel = {}, i = {}".format(reg.rmse, (rmse - reg.rmse) / rmse, i)) 
+        logger.info("{} succeeded, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i))
+
+        if diagnostics:
+            reg.plot()
+        return reg, fids0_filt, fids1_filt
+
+    reg2d, fids0_filt, fids1_filt = sub_func(50, lambda x: x, ["x0", "y0"])
+
+    if only2d:
+        return reg2d
+
+    new_transform = register(fids0_filt, fids1_filt, ["x0", "y0", "z0"]).transform
+    reg3d, _, _ = sub_func(reg2d.rmse, new_transform, ["x0", "y0", "z0"])
     
-    if diagnostics:
-        reg.plot()
-    
-    return reg
+    return reg3d
 
 
 def closest_point_matches(X, Y, method="tree", **kwargs):

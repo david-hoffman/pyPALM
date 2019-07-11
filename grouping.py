@@ -36,7 +36,7 @@ def calculate_zscaling(data, diagnostics=False):
     return median
 
 
-def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=None, drift=None, quantiles=(0.9, 0.99, 0.999)):
+def estimate_grouping_radius(df, sample_size=128, boot_samples=512, zscaling=None, drift=None, quantiles=(0.9, 0.99, 0.999)):
     """Estimate the correct grouping radius from the data, assumes that `df` is the result of
     a single pass group (grouping contiguous--in time--localizations)"""
     if drift is not None:
@@ -56,7 +56,7 @@ def estimate_grouping_radius(df, sample_size=512, boot_samples=4096, zscaling=No
 
     # generate boot strap samples
     boot_strap = []
-    for i in tqdm.tqdm_notebook(range(boot_samples)):
+    for i in tqdm.tnrange(boot_samples):
         # Make fake 2D / 3D point cloud
         sample = df.sample(sample_size, replace=True) * np.random.randn(sample_size, len(df.columns))
         # calculate r for each point
