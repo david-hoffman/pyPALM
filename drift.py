@@ -309,6 +309,9 @@ def remove_all_drift(data, yx_shape, init_drift=None, frames_index=None, atol=1e
             fid0 = remove_drift(fid0, init_drift)
             logger.debug(fid0.head())
         capture_radius = max(fid0.std()[["x0", "y0"]].mean(), 5)
+        if not np.isfinite(capture_radius):
+            # make sure we're not infinite!
+            capture_radius = 5
 
     if init_drift is None:
         logger.debug("initializing drift")
