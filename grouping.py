@@ -14,21 +14,29 @@ import matplotlib.pyplot as plt
 from scipy.spatial import cKDTree
 import dask
 import tempfile
+
 # get a logger
 import logging
+
 logger = logging.getLogger(__name__)
 
 
 def calculate_zscaling(data, diagnostics=False):
     """Calculate the zscaling of the data"""
     # look at ratio of axial extent to lateral extent of gaussian clouds
-    aspect = data.sigma_z / np.sqrt((data[["sigma_x", "sigma_y"]]**2).sum(1))
+    aspect = data.sigma_z / np.sqrt((data[["sigma_x", "sigma_y"]] ** 2).sum(1))
     aspect = aspect[(aspect < aspect.quantile(0.999)) & (aspect > aspect.quantile(1 - 0.999))]
     median = aspect.median()
     if diagnostics:
         fig, ax = plt.subplots(figsize=(5, 4))
         aspect.hist(bins="auto", density=True, ax=ax, histtype="step", linewidth=1)
-        ax.axvline(median, c="C1", label="Median Ratio = {:.1f}".format(median), linewidth=3, linestyle="--")
+        ax.axvline(
+            median,
+            c="C1",
+            label="Median Ratio = {:.1f}".format(median),
+            linewidth=3,
+            linestyle="--",
+        )
         ax.set_xlabel("Ratio of PSF Axial to Lateral Extent")
         ax.yaxis.set_major_locator(plt.NullLocator())
         ax.grid(False)
@@ -36,13 +44,17 @@ def calculate_zscaling(data, diagnostics=False):
     return median
 
 
-def estimate_grouping_radius(df, sample_size=128, boot_samples=512, zscaling=None, drift=None, quantiles=(0.9, 0.99, 0.999)):
+def estimate_grouping_radius(
+    df, sample_size=128, boot_samples=512, zscaling=None, drift=None, quantiles=(0.9, 0.99, 0.999)
+):
     """Estimate the correct grouping radius from the data, assumes that `df` is the result of
     a single pass group (grouping contiguous--in time--localizations)"""
     if drift is not None:
         # copy relevant parameters and add drift in quadrature
         logger.debug("using drift")
-        df = np.sqrt(df[["sigma_x", "sigma_y", "sigma_z"]]**2 + drift[["x0", "y0", "z0"]].values**2)
+        df = np.sqrt(
+            df[["sigma_x", "sigma_y", "sigma_z"]] ** 2 + drift[["x0", "y0", "z0"]].values ** 2
+        )
     else:
         df = df[["sigma_x", "sigma_y", "sigma_z"]]
 
@@ -58,7 +70,9 @@ def estimate_grouping_radius(df, sample_size=128, boot_samples=512, zscaling=Non
     boot_strap = []
     for i in tqdm.tnrange(boot_samples):
         # Make fake 2D / 3D point cloud
-        sample = df.sample(sample_size, replace=True) * np.random.randn(sample_size, len(df.columns))
+        sample = df.sample(sample_size, replace=True) * np.random.randn(
+            sample_size, len(df.columns)
+        )
         # calculate r for each point
         sample = np.sqrt((sample ** 2).sum(1))
         # pick quantiles of r
@@ -99,7 +113,7 @@ def find_matches(frames, radius):
         elif len(m) == 0:
             # should never get here, see list comprehension below
             raise RuntimeError("Something went wrong in `closest_match`")
-        distances = ((t1.data[i] - t0.data[m])**2).sum(1)
+        distances = ((t1.data[i] - t0.data[m]) ** 2).sum(1)
         # return [frame0_idx, frame1_idx]
         return [m[distances.argmin()], i]
 
@@ -125,10 +139,13 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
 
     # define norm functions for later
     if zscaling is None:
+
         def norm(df_sub):
             """return y, x pairs"""
             return df_sub[["y0", "x0"]].values
+
     else:
+
         def norm(df_sub):
             """return z, y, x pairs with normalized z for point matching"""
             return df_sub[["z0", "y0", "x0"]].values / (zscaling, 1, 1)
@@ -164,7 +181,9 @@ def group(df, radius, gap, zscaling=None, frame_reset=np.inf):
                 try:
                     # if there is a new peak that matches to two or more different cached peaks then the newer of the
                     # cached peaks claims it. If the cached peaks have the same age then its a toss up.
-                    cache_idx, peaks_idx = np.array([[df_cache.index[i], peaks.index[m]] for i, m in matches]).T
+                    cache_idx, peaks_idx = np.array(
+                        [[df_cache.index[i], peaks.index[m]] for i, m in matches]
+                    ).T
                 except ValueError as error:
                     # should log the error or raise as a warning.
                     logger.warning(error)
@@ -260,13 +279,15 @@ def agg_groups(df_grouped):
     mu.columns = [c[-1] + "0" for c in mu.columns]
 
     # calc new sigma
-    new_sigmas = (temp_gb[wi2_xi2].sum().values
-                  - 2 * mu[xi] * temp_gb[wi2_xi].sum().values
-                  + (mu[xi] ** 2) * temp_gb[wi2].sum().values)
+    new_sigmas = (
+        temp_gb[wi2_xi2].sum().values
+        - 2 * mu[xi] * temp_gb[wi2_xi].sum().values
+        + (mu[xi] ** 2) * temp_gb[wi2].sum().values
+    )
     gsize = groupsize.values[:, None]
     # we know there'll be floating point errors from the following
     # because we'll divide by zero for groups with one point
-    with np.errstate(divide='ignore', invalid='ignore'):
+    with np.errstate(divide="ignore", invalid="ignore"):
         new_sigmas = np.sqrt((gsize / (gsize - 1)) * new_sigmas / wi_bar ** 2)
     new_sigmas.columns = ["sigma_" + c[0] for c in xi]
     # find the places we divided by zero and replace with single localization sigma
@@ -325,8 +346,10 @@ def chunked_grouper(df, *args, numthreads=24, concat=True, **kwargs):
     length = len(df)
     chunklen = (length + numthreads - 1) // numthreads
     # Create argument tuples for each input chunk
-    grouped = [grouper(df.iloc[i * chunklen:(i + 1) * chunklen], *args, **kwargs)
-               for i in range(numthreads)]
+    grouped = [
+        grouper(df.iloc[i * chunklen : (i + 1) * chunklen], *args, **kwargs)
+        for i in range(numthreads)
+    ]
     if concat:
         # make the concatenation step a task, this can result
         # in failure if the data is too large and processes are used,
@@ -344,8 +367,12 @@ def _chunked_grouper_to_dir(directory, df, *args, numthreads=24, **kwargs):
     # Create argument tuples for each input chunk
     basename = directory + "GrpFile{:05d}.h5"
     logger.debug("Basename = {}".format(basename))
-    grouped = [_grouper_to_file(basename.format(i), df.iloc[i * chunklen:(i + 1) * chunklen], *args, **kwargs)
-               for i in range(numthreads)]
+    grouped = [
+        _grouper_to_file(
+            basename.format(i), df.iloc[i * chunklen : (i + 1) * chunklen], *args, **kwargs
+        )
+        for i in range(numthreads)
+    ]
     return grouped
 
 
@@ -359,15 +386,23 @@ def slab_grouper(slabs, *args, **kwargs):
         dirname = os.path.join(tmpdir, "SlabDir{:05d}")
 
         logger.info("Beginning calculation ...")
-        grouped_slabs_dirs = dask.delayed([
-            # make sure that each slabe is chunked grouped in a temporary dir in our main tempdir
-            _chunked_grouper_to_dir(dirname.format(i), slab, *args, **kwargs) for i, slab in enumerate(slabs)
-        ]).compute(scheduler="processes")
+        grouped_slabs_dirs = dask.delayed(
+            [
+                # make sure that each slabe is chunked grouped in a temporary dir in our main tempdir
+                _chunked_grouper_to_dir(dirname.format(i), slab, *args, **kwargs)
+                for i, slab in enumerate(slabs)
+            ]
+        ).compute(scheduler="processes")
         logger.info("... finishing calculation.")
 
         # read back data into slabs
         logger.info("Beginning reading back data ...")
-        grouped_slabs = dask.delayed([dask.delayed(pd.concat)(dask.delayed([_file_to_grouper(f) for f in d]))for d in grouped_slabs_dirs])
+        grouped_slabs = dask.delayed(
+            [
+                dask.delayed(pd.concat)(dask.delayed([_file_to_grouper(f) for f in d]))
+                for d in grouped_slabs_dirs
+            ]
+        )
         grouped_slabs = grouped_slabs.compute()
         logger.info("... finishing reading back data")
 
@@ -423,7 +458,7 @@ def count_blinks(offtimes, gap):
     """
     breaks = np.nonzero(offtimes > gap)[0]
     if breaks.size:
-        blinks = [offtimes[breaks[i] + 1:breaks[i + 1]] for i in range(breaks.size - 1)]
+        blinks = [offtimes[breaks[i] + 1 : breaks[i + 1]] for i in range(breaks.size - 1)]
     else:
         blinks = [offtimes]
-    return ([len(blink) for blink in blinks])
+    return [len(blink) for blink in blinks]

@@ -15,11 +15,14 @@ import scipy.spatial as spatial
 import scipy.spatial.distance as distance
 import scipy.linalg as la
 from skimage.transform._geometric import _umeyama
+
 # plotting
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
+
 # get a logger
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -28,6 +31,7 @@ class BaseCPD(object):
     Myronenko and Xubo Song - 2010 - Point Set Registration Coherent Point Drift
     DOI: 10.1109/TPAMI.2010.46
     """
+
     def __init__(self, X, Y):
         """Set up the registration class that will actually perform the CPD algorithm
         
@@ -51,7 +55,9 @@ class BaseCPD(object):
     def __str__(self):
         basestr = "Model = {}, X = {},  Y = {}".format(self.__class__, self.X.shape, self.Y.shape)
         try:
-            extrastr = ", w = {}, i = {}, Q = {}, B = {}, t = {}".format(self.w, self.iteration, self.Q, self.B, self.translation)
+            extrastr = ", w = {}, i = {}, Q = {}, B = {}, t = {}".format(
+                self.w, self.iteration, self.Q, self.B, self.translation
+            )
         except AttributeError:
             extrastr = ", registration not run"
         return basestr + extrastr
@@ -59,7 +65,7 @@ class BaseCPD(object):
     @property
     def matches(self):
         """return X, Y matches"""
-        return np.where(self.p_old > max(min(self.w,0.9), np.finfo(float).eps))[::-1]
+        return np.where(self.p_old > max(min(self.w, 0.9), np.finfo(float).eps))[::-1]
 
     def _estimate(self):
         """This is the actual method to overload in the child classes"""
@@ -67,7 +73,9 @@ class BaseCPD(object):
 
     def estimate(self):
         """estimate the simple transform for matching pairs"""
-        logger.debug("Doing a simple estimation of the transformation for {}".format(self.__class__))
+        logger.debug(
+            "Doing a simple estimation of the transformation for {}".format(self.__class__)
+        )
         self._estimate()
         # this assumes it's being called from a child class
         self.updateTY()
@@ -92,36 +100,42 @@ class BaseCPD(object):
             ax0 = fig.add_subplot(121, projection=projection)
             ax1 = fig.add_subplot(122)
             axs = (ax0, ax1)
-            
+
             ax0.scatter(*self.Y.T[s], marker=".", c="g")
             ax0.scatter(*self.TY.T[s], marker="o", c="b")
             ax0.scatter(*self.X.T[s], marker="x", c="r")
-            ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot='tail')
+            ax0.quiver(*self.Y.T[s], *(self.TY.T[s] - self.Y.T[s]), color="orange", pivot="tail")
             if projection is None:
                 ax0.set_aspect("equal")
-            ax0.set_title("RMSE = {:.3f}, i = {}\ntvec = {}".format(self.rmse, self.iteration, self.translation))
+            ax0.set_title(
+                "RMSE = {:.3f}, i = {}\ntvec = {}".format(
+                    self.rmse, self.iteration, self.translation
+                )
+            )
         else:
             fig, ax1 = plt.subplots(1)
-            axs = (ax1, )
+            axs = (ax1,)
         ax1.matshow(self.p_old)
-        
+
         ax1.set_aspect("auto")
-        ax1.set_title("Num pnts = {}, numcorr = {}".format(len(self.TY), (self.p_old > self.w).sum()))
+        ax1.set_title(
+            "Num pnts = {}, numcorr = {}".format(len(self.TY), (self.p_old > self.w).sum())
+        )
         return fig, axs
 
     def transform(self, other):
         return other @ self.B.T + self.translation
-    
+
     def updateTY(self):
         """Update the transformed point cloud and distance matrix"""
         self.TY = self.transform(self.Y)
         # we need to update the distance matrix too
         # This gives us a matrix of ||x - T(y)||**2, eq (1)
         # But we want the rows to be m and columns n
-        self.dist_matrix = distance.cdist(self.TY, self.X, 'sqeuclidean')
+        self.dist_matrix = distance.cdist(self.TY, self.X, "sqeuclidean")
         # make sure we have the right shape
         assert self.dist_matrix.shape == (self.M, self.N), "Error with dist_matrix"
-    
+
     # these are defined in the paper but not used, included here for completeness
     # @property
     # def pGMM(self):
@@ -130,12 +144,12 @@ class BaseCPD(object):
     #     p_mat = np.exp(- self.dist_matrix / 2 / self.var) / norm_factor
     #     # sum along the fixed points
     #     return p_mat.sum(0)
-    
+
     # @property
     # def p(self):
     #     """The total probability including the uniform distribution"""
     #     return self.w / self.N + (1 - self.w) * self.pGMM
-    
+
     def estep(self):
         """The expectation step were we calculate the posterior probability of the GMM centroids"""
         # calculate "P_old" via equation 6
@@ -145,7 +159,9 @@ class BaseCPD(object):
         c *= self.M / self.N
         # sum along the moving points, i.e. along M
         denominator = p_mat.sum(0, keepdims=True)
-        assert denominator.shape == (1, self.N), "Calculation of denominator failed {}".format(denominator.shape)
+        assert denominator.shape == (1, self.N), "Calculation of denominator failed {}".format(
+            denominator.shape
+        )
         # check if denominator is all zeros, which means p_mat is all zeros
         if (denominator <= np.finfo(float).eps).all():
             # then the final p should just be a uniform distribution
@@ -160,16 +176,18 @@ class BaseCPD(object):
         # compute Np, make sure it's neither zero nor more than N
         self.Np = min(self.N, max(p_old.sum(), np.finfo(float).eps))
         # update Q so we can track convergence using equation (5)
-        self.Q = (p_old * self.dist_matrix).sum() / 2 / self.var + self.Np * self.D * np.log(self.var) / 2
+        self.Q = (p_old * self.dist_matrix).sum() / 2 / self.var + self.Np * self.D * np.log(
+            self.var
+        ) / 2
         # store p_old
         self.p_old = p_old
-        
+
     def updateB(self):
         """Update B matrix, this is the only method that needs to be overloaded for
         the various linear transformation subclasses, more will need to be done for
         non-rigid transformation models"""
         raise NotImplementedError
-        
+
     def mstep(self):
         """Maximization step: update transformation and variance these are the transposes of the
         equations on p. 2265 and 2266
@@ -181,15 +199,15 @@ class BaseCPD(object):
         assert mu_x.size == mu_y.size == self.D, "Dimensions on mu's are wrong"
         Xhat = self.Xhat = self.X - mu_x
         Yhat = self.Yhat = self.Y - mu_y
-        
+
         # calculate A
         self.A = A = Xhat.T @ self.p_old.T @ Yhat
-        
+
         # calculate B
         B = self.updateB()
-        
+
         # calculate translation
-        self.translation = (mu_x - mu_y @ B.T)
+        self.translation = mu_x - mu_y @ B.T
 
         # calculate estimate of variance
         self.var = np.trace(Xhat.T @ np.diag(self.p_old.sum(0)) @ Xhat) - np.trace(A @ B.T)
@@ -199,7 +217,9 @@ class BaseCPD(object):
         if self.var < np.finfo(float).eps:
             # self.var = np.finfo(float).eps
             self.var = self.tol
-            logger.warning("Variance has dropped below machine precision, setting to {}".format(self.var))
+            logger.warning(
+                "Variance has dropped below machine precision, setting to {}".format(self.var)
+            )
             # self.var = self.init_var = self.init_var * 2
             # self.translation = -self.Y.mean(axis=0) + self.X.mean(axis=0)
             # print("Var small resetting to", self.var)
@@ -253,11 +273,13 @@ class BaseCPD(object):
         # the scale matrices are diagonal so S.T == S
         self.Y = self.Y @ Sy_1 + self.ty
         self.X = self.X @ Sx_1 + self.tx
-        # B doesn't need to be transposed and 
+        # B doesn't need to be transposed and
         self.B = Sx_1 @ self.B @ Sy
         self.translation = -self.ty @ self.B.T + self.translation @ Sx_1 + self.tx
-    
-    def __call__(self, tol=1e-6, dist_tol=0, maxiters=1000, init_var=None, weight=0, normalization=True):
+
+    def __call__(
+        self, tol=1e-6, dist_tol=0, maxiters=1000, init_var=None, weight=0, normalization=True
+    ):
         """perform the actual registration
 
         Parameters
@@ -282,17 +304,17 @@ class BaseCPD(object):
         if normalization:
             self.norm_data()
         self.updateTY()
-        
+
         # set up initial variance
         if init_var is None:
             init_var = self.calc_var()
         self.var = self.init_var = init_var
         logger.debug("self.init_var = {}".format(self.var))
-        
+
         # initialize the weight of the uniform distribution
         assert 0 <= weight < 1, "Weight must be between 0 and 1"
         self.w = weight
-        
+
         for self.iteration in range(maxiters):
             # do iterations expectation, maximization followed by transformation
             self.estep()
@@ -301,7 +323,7 @@ class BaseCPD(object):
             if self.iteration > 0:
                 # now update Q to follow convergence
                 # we want to minimize Q so Q_old should be more positive than the new Q
-                Q_delta = np.abs(self.Q_old - self.Q)  #/ np.abs(self.Q_old)
+                Q_delta = np.abs(self.Q_old - self.Q)  # / np.abs(self.Q_old)
                 if Q_delta < 0:
                     logger.warning("Q_delta = {}".format(Q_delta))
                 logger.debug("Q_delta = {}".format(Q_delta))
@@ -313,8 +335,11 @@ class BaseCPD(object):
                     break
             self.Q_old = self.Q
         else:
-            logger.warning(("Maximum iterations ({}) reached without" +
-                            " convergence, final Q = {:.3e}").format(self.iteration, self.Q))
+            logger.warning(
+                (
+                    "Maximum iterations ({}) reached without" + " convergence, final Q = {:.3e}"
+                ).format(self.iteration, self.Q)
+            )
         # update p matrix once more
         self.estep()
         # unnorm the data and apply the final transformation.
@@ -327,6 +352,7 @@ class BaseCPD(object):
 
 class TranslationCPD(BaseCPD):
     """Coherent point drift with a translation only transformation model"""
+
     def updateB(self):
         """Translation only means that B should be identity"""
         self.B = np.eye(self.D)
@@ -345,6 +371,7 @@ class TranslationCPD(BaseCPD):
 class SimilarityCPD(BaseCPD):
     """Coherent point drift with a similarity (translation, rotation and isotropic scaling)
     transformation model"""
+
     # this class is specifically designed so that it can be easily subclassed to represent
     # a rigid transformation model.
     def calculateR(self):
@@ -355,13 +382,13 @@ class SimilarityCPD(BaseCPD):
         C = np.diag(c)
         self.R = U @ C @ VT
         return self.R
-    
+
     def calculateS(self):
         """Calculate the scale factor, Fig 2 p. 2266"""
         a = self.Yhat.T @ np.diag(self.p_old.sum(1)) @ self.Yhat
         self.s = np.trace(self.A.T @ self.R) / np.trace(a)
         return self.s
-    
+
     def updateB(self):
         """B in this case is just the rotation matrix multiplied by the scale factor"""
         R = self.calculateR()
@@ -391,12 +418,15 @@ class SimilarityCPD(BaseCPD):
         # T is in the usual orientation
         B = T[:D, :D]
         translation = T[:D, -1:].T
-        assert np.allclose(T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))), "Error, T = {}".format(T)
+        assert np.allclose(
+            T[-1, :], np.concatenate((np.zeros(D), np.ones(1)))
+        ), "Error, T = {}".format(T)
         self.B, self.translation = B, translation
 
 
 class RigidCPD(SimilarityCPD):
     """Coherent point drift with a rigid or Euclidean (translation and rotation) transformation model"""
+
     def calculateS(self):
         """No scaling for this guy"""
         return 1
@@ -410,12 +440,14 @@ class RigidCPD(SimilarityCPD):
     # for rigid we also want to avoid anything other than uniform scaling
     calc_init_scale = TranslationCPD.calc_init_scale
 
+
 EuclideanCPD = RigidCPD
 
 
 class AffineCPD(BaseCPD):
     """Coherent point drift with a similarity (translation, rotation, shear and anisotropic scaling)
     transformation model"""
+
     def updateB(self):
         """Solve for B using equations in Fig. 3 p. 2266"""
         a = self.Yhat.T @ np.diag(self.p_old.sum(1)) @ self.Yhat
@@ -447,7 +479,9 @@ class AffineCPD(BaseCPD):
         # we want to keep the extra dimension for translation
         translation = T[-1:, :D]
         # make sure that the solution makes sense (last column should be 1 | 0)
-        assert np.allclose(T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))), "Error\nT = {}\nX = {}\nY = {}".format(T, self.X, self.Y)
+        assert np.allclose(
+            T[:, -1], np.concatenate((np.zeros(D), np.ones(1)))
+        ), "Error\nT = {}\nX = {}\nY = {}".format(T, self.X, self.Y)
         self.B, self.translation = B, translation
 
 
@@ -457,7 +491,7 @@ model_dict = {
     "rigid": RigidCPD,
     "euclidean": EuclideanCPD,
     "similarity": SimilarityCPD,
-    "affine": AffineCPD
+    "affine": AffineCPD,
 }
 
 
@@ -536,11 +570,17 @@ def auto_weight(X, Y, model, resolution=0.01, limits=0.05, **kwargs):
 
 def nearest_neighbors(fids0, fids1, r=100, transform=lambda x: x, coords=["x0", "y0"]):
     # find nearest neighbors in both sets
-    idx00, idx01 = closest_point_matches(fids0[coords].values, transform(fids1[coords].values), r=r)
-    idx11, idx10 = closest_point_matches(transform(fids1[coords].values), fids0[coords].values, r=r)
+    idx00, idx01 = closest_point_matches(
+        fids0[coords].values, transform(fids1[coords].values), r=r
+    )
+    idx11, idx10 = closest_point_matches(
+        transform(fids1[coords].values), fids0[coords].values, r=r
+    )
     fids0_filt = fids0.iloc[idx10]
     fids1_filt = fids1.iloc[idx01]
-    idx0, idx1 = closest_point_matches(fids0_filt[coords].values, transform(fids1_filt[coords].values), r=r)
+    idx0, idx1 = closest_point_matches(
+        fids0_filt[coords].values, transform(fids1_filt[coords].values), r=r
+    )
     return fids0_filt.iloc[idx0], fids1_filt.iloc[idx1]
 
 
@@ -553,7 +593,16 @@ def nearest_neighbors(fids0, fids1, r=100, transform=lambda x: x, coords=["x0", 
 #     return rmse
 
 
-def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation", only2d=False, iters=100):
+def align(
+    fids0,
+    fids1,
+    atol=1,
+    rtol=1e-3,
+    diagnostics=False,
+    model="translation",
+    only2d=False,
+    iters=100,
+):
     """Align two slabs fiducials, assumes that z coordinate has been normalized"""
     model = choose_model(model)
 
@@ -567,7 +616,14 @@ def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation
 
     def sub_func(rmse, transform, coords):
         for i in range(iters):
-            fids0_filt, fids1_filt = nearest_neighbors(fids0, fids1, r=max(rmse * 2, 1), transform=transform, coords=coords)
+            r = max(rmse * 2, 1)
+            try:
+                fids0_filt, fids1_filt = nearest_neighbors(
+                    fids0, fids1, r=r, transform=transform, coords=coords
+                )
+            except ValueError:
+                rmse *= 2
+                continue
             reg = register(fids0_filt, fids1_filt, coords)
             transform = reg.transform
             rmse_new = reg.rmse
@@ -576,9 +632,13 @@ def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation
                 break
             rmse = rmse_new
         else:
-            logger.error("{} failed, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i))
+            logger.error(
+                "{} failed, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i)
+            )
 
-        logger.info("{} succeeded, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i))
+        logger.info(
+            "{} succeeded, rmse = {}, rel = {}, i = {}".format(coords, rmse_new, rmse_rel, i)
+        )
 
         if diagnostics:
             reg.plot()
@@ -591,7 +651,7 @@ def align(fids0, fids1, atol=1, rtol=1e-3, diagnostics=False, model="translation
 
     new_transform = register(fids0_filt, fids1_filt, ["x0", "y0", "z0"]).transform
     reg3d, _, _ = sub_func(reg2d.rmse, new_transform, ["x0", "y0", "z0"])
-    
+
     return reg3d
 
 
@@ -629,10 +689,16 @@ def _keepclosestbrute(X, Y, r=10, percentile=None):
     # if user requests percentile
     if percentile is not None:
         r = np.percentile(dist_matrix, percentile * (len(X) + len(Y)) / (len(X) * len(Y)))
-    logger.debug("r = {}, fraction pairs kept = {}".format(r, (dist_matrix < r).sum() / dist_matrix.size))
+    logger.debug(
+        "r = {}, fraction pairs kept = {}".format(r, (dist_matrix < r).sum() / dist_matrix.size)
+    )
     result = [np.unique(a) for a in np.where(dist_matrix < r)]
     # log percentages
-    logger.debug("percentage x kept = {}, y kept = {}".format(*[len(a) / len(aa) for a, aa in zip(result, (X, Y))]))
+    logger.debug(
+        "percentage x kept = {}, y kept = {}".format(
+            *[len(a) / len(aa) for a, aa in zip(result, (X, Y))]
+        )
+    )
     return result
 
 
@@ -651,7 +717,9 @@ def _keepclosesttree(X, Y, r=10):
     if uxpoints.size < xpoints.size or uypoints.size < ypoints.size:
         logger.debug("taking unique points")
         xpoints, ypoints = uxpoints, uypoints
-    logger.debug("percentage x kept = {}, y kept = {}".format(len(xpoints) / len(X), len(ypoints) / len(Y)))
+    logger.debug(
+        "percentage x kept = {}, y kept = {}".format(len(xpoints) / len(X), len(ypoints) / len(Y))
+    )
 
     return xpoints, ypoints
 
@@ -702,7 +770,7 @@ def propogate_transforms(regs, initial=None):
 
 def apply_transform_to_slab(s, B, t, copy=True):
     """Apply a given transform to a slab"""
-    coords = ["x0", "y0", "z0"][:len(B)]
+    coords = ["x0", "y0", "z0"][: len(B)]
     # copy slab so as to not change original.
     if copy:
         s2 = s.copy()

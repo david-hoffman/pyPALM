@@ -31,16 +31,22 @@ import dask
 import dask.array
 
 import logging
+
 logger = logging.getLogger()
 
 greys_alpha_cm = ListedColormap([(i / 255,) * 3 + ((255 - i) / 255,) for i in range(256)])
 
-general_meta_data = {
-    "git revision": get_git(os.path.split(__file__)[0]),
-    "module": __name__
-}
+general_meta_data = {"git revision": get_git(os.path.split(__file__)[0]), "module": __name__}
 
-image_software = tif.__name__ + "-" + tif.__version__ + "+" + general_meta_data["module"] + "-" + general_meta_data["git revision"]
+image_software = (
+    tif.__name__
+    + "-"
+    + tif.__version__
+    + "+"
+    + general_meta_data["module"]
+    + "-"
+    + general_meta_data["git revision"]
+)
 
 general_meta_data["image_software"] = image_software
 
@@ -53,11 +59,11 @@ def choose_dtype(max_value):
     if np.issubdtype(max_value, np.inexact):
         return np.float32
     # check for integers now
-    if max_value < 2**8:
+    if max_value < 2 ** 8:
         return np.uint8
-    elif max_value < 2**16:
+    elif max_value < 2 ** 16:
         return np.uint16
-    elif max_value < 2**32:
+    elif max_value < 2 ** 32:
         return np.uint32
     return np.float32
 
@@ -96,8 +102,7 @@ def jit_hist3d(zpositions, ypositions, xpositions, shape):
 
 
 @njit(nogil=True)
-def jit_hist3d_with_weights(zpositions, ypositions, xpositions, weights,
-                            shape):
+def jit_hist3d_with_weights(zpositions, ypositions, xpositions, weights, shape):
     """Generate a histogram of points in 3D
 
     Parameters
@@ -136,8 +141,8 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
         M = len(bins)
         if M != D:
             raise ValueError(
-                'The dimension of bins must be equal to the dimension of the'
-                ' sample x.')
+                "The dimension of bins must be equal to the dimension of the" " sample x."
+            )
     except TypeError:
         # bins is an integer
         bins = D * [bins]
@@ -154,8 +159,7 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
             smax = atleast_1d(np.array(sample.max(0), float))
     else:
         if not np.all(np.isfinite(myrange)):
-            raise ValueError(
-                'myrange parameter must be finite.')
+            raise ValueError("myrange parameter must be finite.")
         smin = np.zeros(D)
         smax = np.zeros(D)
         for i in range(D):
@@ -164,8 +168,8 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
     # Make sure the bins have a finite width.
     for i in range(len(smin)):
         if smin[i] == smax[i]:
-            smin[i] = smin[i] - .5
-            smax[i] = smax[i] + .5
+            smin[i] = smin[i] - 0.5
+            smax[i] = smax[i] + 0.5
 
     # avoid rounding issues for comparisons when dealing with inexact types
     if np.issubdtype(sample.dtype, np.inexact):
@@ -177,8 +181,8 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
         if np.isscalar(bins[i]):
             if bins[i] < 1:
                 raise ValueError(
-                    "Element at index %s in `bins` should be a positive "
-                    "integer." % i)
+                    "Element at index %s in `bins` should be a positive " "integer." % i
+                )
             nbin[i] = bins[i] + 2  # +2 for outlier bins
             edges[i] = np.linspace(smin[i], smax[i], nbin[i] - 1, dtype=edge_dt)
         else:
@@ -188,7 +192,8 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
         if np.any(np.asarray(dedges[i]) <= 0):
             raise ValueError(
                 "Found bin edge of size <= 0. Did you specify `bins` with"
-                "non-monotonic sequence?")
+                "non-monotonic sequence?"
+            )
 
     nbin = np.asarray(nbin)
 
@@ -210,9 +215,8 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
         if not np.isinf(mindiff):
             decimal = int(-np.log10(mindiff)) + 6
             # Find which points are on the rightmost edge.
-            not_smaller_than_edge = (sample[:, i] >= edges[i][-1])
-            on_edge = (np.around(sample[:, i], decimal) ==
-                       np.around(edges[i][-1], decimal))
+            not_smaller_than_edge = sample[:, i] >= edges[i][-1]
+            on_edge = np.around(sample[:, i], decimal) == np.around(edges[i][-1], decimal)
             # Shift these points one bin to the left.
             Ncount[i][np.where(on_edge & not_smaller_than_edge)[0]] -= 1
 
@@ -222,6 +226,7 @@ def fast_hist3d(sample, bins, myrange=None, weights=None):
     else:
         hist = jit_hist3d(*Ncount, shape=shape)
     return hist, edges
+
 
 ### Gaussian Rendering
 def _gauss(yw, xw, y0, x0, sy, sx):
@@ -234,6 +239,7 @@ def _gauss(yw, xw, y0, x0, sy, sx):
     gy = np.exp(-((y - y0) / sy) ** 2 / 2)
     gx = np.exp(-((x - x0) / sx) ** 2 / 2)
     return amp * np.outer(gy, gx)
+
 
 _jit_gauss = njit(_gauss, nogil=True)
 
@@ -294,10 +300,22 @@ def _gen_img_sub(yx_shape, params, mag, multipliers, diffraction_limit):
         img[ystart:yend, xstart:xend] += g
     return img
 
+
 _jit_gen_img_sub = njit(_gen_img_sub, nogil=True)
 
 
-def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_limit=False, numthreads=1, hist=False, colorcode="z0", zscaling=None):
+def gen_img(
+    yx_shape,
+    df,
+    mag=10,
+    cmap="gist_rainbow",
+    weight=None,
+    diffraction_limit=False,
+    numthreads=1,
+    hist=False,
+    colorcode="z0",
+    zscaling=None,
+):
     """Generate a 2D image, optionally with z color coding
 
     Parameters
@@ -349,12 +367,10 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         def func(weights):
             """This is the histogram function"""
             lazy_hist = dask.delayed(np.histogramdd)(
-                df[["y0", "x0"]].values,
-                bins=bins,
-                density=False,
-                weights=weights
+                df[["y0", "x0"]].values, bins=bins, density=False, weights=weights
             )[0]
             return lazy_hist
+
     else:
         # if requested limit sigma_z values to that there aren't super bright guys.
         # min_sigma_z = 1 / np.sqrt(2 * np.pi)
@@ -372,7 +388,9 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
             @dask.delayed
             def delayed_jit_gen_img_sub(chunk):
                 if chunk is not None:
-                    return _jit_gen_img_sub(yx_shape, df_arr[chunk], mag, weights[chunk], diffraction_limit)
+                    return _jit_gen_img_sub(
+                        yx_shape, df_arr[chunk], mag, weights[chunk], diffraction_limit
+                    )
                 return _jit_gen_img_sub(yx_shape, df_arr, mag, weights, diffraction_limit)
 
             if numthreads > 1:
@@ -391,7 +409,7 @@ def gen_img(yx_shape, df, mag=10, cmap="gist_rainbow", weight=None, diffraction_
         # normalize z into the range of 0 to 1
         norm_z = scale(df[colorcode].values)
         # Calculate weighted colors for each z position
-        wz = (w[:, None] * matplotlib.cm.get_cmap(cmap)(norm_z))
+        wz = w[:, None] * matplotlib.cm.get_cmap(cmap)(norm_z)
         # generate the weighted r, g, anb b images
         img_wz_r = func(wz[:, 0])
         img_wz_g = func(wz[:, 1])
@@ -448,6 +466,7 @@ def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
     op = getattr(np.ndarray, projection)
     d_max = data.max()
     d_min = data.min()
+
     @dask.delayed
     def func(d):
         """Mean func of a plane"""
@@ -459,8 +478,10 @@ def depthcodeimage(data, cmap="gist_rainbow", projection="max"):
         rgb = np.rollaxis(op(weighted_d, axis=0), 1)
         rgba = np.hstack((rgb, alpha))
         return rgba
-    
-    rgba = dask.array.stack([dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)])
+
+    rgba = dask.array.stack(
+        [dask.array.from_delayed(func(d), (nx, 4), float) for d in np.rollaxis(data, 1)]
+    )
     return DepthCodedImage(rgba.compute(), cmap, 1, (0, 1))
 
 
@@ -474,7 +495,7 @@ def contrast_enhancement(data, vmax=None, vmin=None, **kwargs):
         vmin = data.min()
 
     a = 1 / (vmax - vmin)
-    b = - vmin * a
+    b = -vmin * a
     return a * data + b
 
 
@@ -497,9 +518,9 @@ class DepthCodedImage(np.ndarray):
         # see InfoArray.__array_finalize__ for comments
         if obj is None:
             return
-        self.cmap = getattr(obj, 'cmap', None)
-        self.mag = getattr(obj, 'mag', None)
-        self._zrange = getattr(obj, '_zrange', None)
+        self.cmap = getattr(obj, "cmap", None)
+        self.mag = getattr(obj, "mag", None)
+        self._zrange = getattr(obj, "_zrange", None)
 
     @property
     def zrange(self):
@@ -515,26 +536,23 @@ class DepthCodedImage(np.ndarray):
 
     @property
     def info_dict(self):
-        info_dict = dict(
-            cmap=self.cmap,
-            mag=self.mag,
-            zrange=self.zrange
-        )
+        info_dict = dict(cmap=self.cmap, mag=self.mag, zrange=self.zrange)
         return info_dict
 
     def save(self, savepath):
         """Save data and metadata to a tif file"""
 
         tif_kwargs = dict(
-            imagej=True, resolution=(self.mag, self.mag),
+            imagej=True,
+            resolution=(self.mag, self.mag),
             metadata=dict(
                 # let's stay agnostic to units for now
                 unit="pixel",
                 # dump info_dict into string
                 info=json.dumps(self.info_dict),
-                axes='YXC'
+                axes="YXC",
             ),
-            software=image_software
+            software=image_software,
         )
 
         tif_kwargs["metadata"].update(general_meta_data)
@@ -622,10 +640,10 @@ class DepthCodedImage(np.ndarray):
                 def add_text(k, v):
                     """Stringify all the things"""
                     pnginfo.add_text(str(k), str(v))
-                
+
                 for k, v in self.info_dict.items():
                     add_text(k, v)
-                
+
                 add_text("software", image_software)
                 imwrite_kwargs["pnginfo"] = pnginfo
 
@@ -635,7 +653,14 @@ class DepthCodedImage(np.ndarray):
         # normalize path name to make sure that it end's in .tif
         DepthCodedImage(self.alpha, self.cmap, self.mag, self.zrange).save(savepath)
 
-    def plot(self, pixel_size=0.13, unit="μm", scalebar_size=None, subplots_kwargs=dict(), norm_kwargs=dict()):
+    def plot(
+        self,
+        pixel_size=0.13,
+        unit="μm",
+        scalebar_size=None,
+        subplots_kwargs=dict(),
+        norm_kwargs=dict(),
+    ):
         """Make a nice plot of the data, with a scalebar"""
         # make the figure and axes
         fig, ax = plt.subplots(**subplots_kwargs)
@@ -653,18 +678,19 @@ class DepthCodedImage(np.ndarray):
             # make sure the length makes sense in data units
             scalebar_length = scalebar_size * self.mag / pixel_size
             default_scale_bar_kwargs = dict(
-                loc='lower left',
+                loc="lower left",
                 pad=0.5,
-                color='white',
+                color="white",
                 frameon=False,
                 size_vertical=scalebar_length / 10,
-                fontproperties=fm.FontProperties(size="large", weight="bold")
+                fontproperties=fm.FontProperties(size="large", weight="bold"),
             )
-            scalebar = AnchoredSizeBar(ax.transData,
-                                       scalebar_length,
-                                       '{} {}'.format(scalebar_size, unit),
-                                       **default_scale_bar_kwargs
-                                       )
+            scalebar = AnchoredSizeBar(
+                ax.transData,
+                scalebar_length,
+                "{} {}".format(scalebar_size, unit),
+                **default_scale_bar_kwargs
+            )
             # add the scalebar
             ax.add_artist(scalebar)
         # remove ticks
@@ -710,23 +736,43 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
         # find the fiducials worth rendering
         df_zplane = df[np.abs(df.z0 - zplane) < df.sigma_z * radius]
         # calculate the amplitude of the z gaussian.
-        amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (np.sqrt(2 * np.pi) * df_zplane.sigma_z)
+        amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (
+            np.sqrt(2 * np.pi) * df_zplane.sigma_z
+        )
         # generate a 2D image weighted by the z gaussian.
-        toreturn = _jit_gen_img_sub(yx_shape, df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values, mag, amps.values, diffraction_limit)
+        toreturn = _jit_gen_img_sub(
+            yx_shape,
+            df_zplane[["y0", "x0", "sigma_y", "sigma_x"]].values,
+            mag,
+            amps.values,
+            diffraction_limit,
+        )
         # remove all temporaries
         del df_zplane
         del amps
         gc.collect()
         return toreturn
+
     # Build delayed array
-    rendered_planes = [dask.array.from_delayed(_gen_zplane(zplane), new_shape, np.float)
-                       for zplane in zplanes]
+    rendered_planes = [
+        dask.array.from_delayed(_gen_zplane(zplane), new_shape, np.float) for zplane in zplanes
+    ]
     to_compute = dask.array.stack(rendered_planes)
     return to_compute.compute(num_workers=num_workers)
 
 
-def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, diffraction_limit=False,
-                hist=False, num_workers=None, **kwargs):
+def save_img_3d(
+    yx_shape,
+    df,
+    savepath,
+    zspacing=None,
+    zplanes=None,
+    mag=10,
+    diffraction_limit=False,
+    hist=False,
+    num_workers=None,
+    **kwargs
+):
     """Generates and saves a gaussian rendered 3D image along with the relevant metadata in a tif stack
 
     Parameters
@@ -779,16 +825,16 @@ def save_img_3d(yx_shape, df, savepath, zspacing=None, zplanes=None, mag=10, dif
                 # This information is mostly redundant with "spacing" but is included
                 # incase one wanted to render arbitrarily spaced planes.
                 labels=["z = {}".format(zplane) for zplane in zplanes],
-                axes="ZYX"
+                axes="ZYX",
             ),
-            software=image_software
+            software=image_software,
         )
 
         tif_kwargs["metadata"].update(general_meta_data)
 
         tif_ready = tif_convert(img3d)
         # check if bigtiff is necessary.
-        if tif_ready.nbytes / (4 * 1024**3) < 0.95:
+        if tif_ready.nbytes / (4 * 1024 ** 3) < 0.95:
             tif_kwargs.update(dict(imagej=True))
         else:
             tif_kwargs.update(dict(imagej=False, bigtiff=True))

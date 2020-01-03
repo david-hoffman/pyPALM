@@ -16,8 +16,9 @@ def peakselector_df(path, verbose=False):
     """Read a peakselector file into a pandas dataframe"""
     print("Reading {} into memory ... ".format(path))
     sav = readsav(path, verbose=verbose)
-    df = pd.DataFrame(sav["cgroupparams"].byteswap().newbyteorder(),
-                      columns=sav["rownames"].astype(str))
+    df = pd.DataFrame(
+        sav["cgroupparams"].byteswap().newbyteorder(), columns=sav["rownames"].astype(str)
+    )
     return df
 
 
@@ -28,31 +29,32 @@ def grouped_peaks(df):
 
 class PALMData(object):
     """A simple class to manipulate peakselector data"""
+
     # columns we want to keep
     # 'amp', 'x0', 'y0', 'sigma_x', 'sigma_y', 'rho', 'offset'
     peak_col = {
-        'X Position': "xpos",
-        'Y Position': "ypos",
-        '6 N Photons': "nphotons",
-        'Frame Number': "framenum",
-        'Sigma X Pos Full': "sigmax",
-        'Sigma Y Pos Full': "sigmay",
-        'Z Position': 'zpos',
-        'Offset': 'offset',
-        'Amplitude': 'amp'
+        "X Position": "xpos",
+        "Y Position": "ypos",
+        "6 N Photons": "nphotons",
+        "Frame Number": "framenum",
+        "Sigma X Pos Full": "sigmax",
+        "Sigma Y Pos Full": "sigmay",
+        "Z Position": "zpos",
+        "Offset": "offset",
+        "Amplitude": "amp",
     }
 
     group_col = {
-        'Frame Number': 'framenum',
-        'Group X Position': 'xpos',
-        'Group Y Position': 'ypos',
-        'Group Sigma X Pos': 'sigmax',
-        'Group Sigma Y Pos': 'sigmay',
-        'Group N Photons': 'nphotons',
-        '24 Group Size': 'groupsize',
-        'Group Z Position': 'zpos',
-        'Offset': 'offset',
-        'Amplitude': 'amp'
+        "Frame Number": "framenum",
+        "Group X Position": "xpos",
+        "Group Y Position": "ypos",
+        "Group Sigma X Pos": "sigmax",
+        "Group Sigma Y Pos": "sigmay",
+        "Group N Photons": "nphotons",
+        "24 Group Size": "groupsize",
+        "Group Z Position": "zpos",
+        "Offset": "offset",
+        "Amplitude": "amp",
     }
 
     def __init__(self, path_to_sav, *args, verbose=True, init=False, **kwargs):
@@ -60,11 +62,11 @@ class PALMData(object):
         and where the peakselector processed data is
         
         Assumes paths_to_raw are properly sorted"""
-            
+
         # load peakselector data
         raw_df = peakselector_df(path_to_sav, verbose=verbose)
         # convert Frame number to int
-        raw_df['Frame Number'] = raw_df['Frame Number'].astype(int)
+        raw_df["Frame Number"] = raw_df["Frame Number"].astype(int)
         self.processed = raw_df[list(self.peak_col.keys())]
         self.grouped = grouped_peaks(raw_df)[list(self.group_col.keys())]
         # normalize column names
@@ -79,11 +81,11 @@ class PALMData(object):
         for df_title in ("processed", "grouped"):
             df = self.__dict__[df_title]
             filter_series = (
-                (df.offset > 0) & # we know that offset should be around this value.
-                (df.offset < offset) &
-                (df.sigmax < sigma_max) &
-                (df.sigmay < sigma_max) &
-                (df.nphotons > nphotons)
+                (df.offset > 0)
+                & (df.offset < offset)  # we know that offset should be around this value.
+                & (df.sigmax < sigma_max)
+                & (df.sigmay < sigma_max)
+                & (df.nphotons > nphotons)
             )
             if "groupsize" in df.keys():
                 filter_series &= df.groupsize < groupsize
@@ -102,5 +104,6 @@ class PALMData(object):
                 df = self.processed
         else:
             raise TypeError("Data type {} is of unknown type".format(data_type))
-        return df[['offset', 'amp', 'xpos', 'ypos', 'nphotons',
-            'sigmax', 'sigmay', 'zpos']].hist(bins=128, figsize=(12, 12), log=True)
+        return df[["offset", "amp", "xpos", "ypos", "nphotons", "sigmax", "sigmay", "zpos"]].hist(
+            bins=128, figsize=(12, 12), log=True
+        )

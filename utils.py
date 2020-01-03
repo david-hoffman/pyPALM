@@ -16,6 +16,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import *
 from sklearn.metrics.classification import *
 import logging
+
 logger = logging.getLogger(__name__)
 
 coords = ["z0", "y0", "x0"]
@@ -35,6 +36,7 @@ def build_query(window):
     query = " & ".join(query_list)
     logger.debug('Query = "{}"'.format(query))
     return query
+
 
 def crop(df, window, shift=False):
     """Crop a palm dataframe
@@ -100,7 +102,9 @@ def weighted_avg(df, cols=coords, weight="amp"):
     return result
 
 
-def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagnostics=False, **kwargs):
+def find_outliers(
+    df_in, good, bad, sample_size=300000, feature_cols=None, diagnostics=False, **kwargs
+):
     """Find outlier points by providing example good and bad data
 
     Parameters
@@ -135,7 +139,9 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
         bad = bad.assign(good=0)
         good = good.assign(good=1)
 
-    df = pd.concat([bad, good], ignore_index=True).sample(frac=1.0)  # put them together and then shuffle
+    df = pd.concat([bad, good], ignore_index=True).sample(
+        frac=1.0
+    )  # put them together and then shuffle
     if feature_cols is None:
         # we want to use all columns, so that we can take into account groupsize
         feature_cols = list(df_in.columns)
@@ -156,8 +162,8 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
         max_depth=10,
         min_child_weight=20,
         subsample=0.8,
-        tree_method='exact',
-        n_jobs=-1
+        tree_method="exact",
+        n_jobs=-1,
     )
 
     # update with user parameters
@@ -165,7 +171,7 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
 
     pipeline = make_pipeline(
         PolynomialFeatures(degree=2, include_bias=False, interaction_only=False),
-        XGBClassifier(**default_kwargs)
+        XGBClassifier(**default_kwargs),
     )
 
     # test train split for diagnostics
@@ -177,13 +183,15 @@ def find_outliers(df_in, good, bad, sample_size=300000, feature_cols=None, diagn
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size)
 
     def evaluate_preds(y_hat):
-        return pd.Series({
-            'precision': precision_score(y_test, y_hat),  # true positives
-            'recall': recall_score(y_test, y_hat),  # of all good ones
-            'f1': f1_score(y_test, y_hat),
-            'accuracy': accuracy_score(y_test, y_hat),
-            'roc_auc': roc_auc_score(y_test, y_hat)
-        })
+        return pd.Series(
+            {
+                "precision": precision_score(y_test, y_hat),  # true positives
+                "recall": recall_score(y_test, y_hat),  # of all good ones
+                "f1": f1_score(y_test, y_hat),
+                "accuracy": accuracy_score(y_test, y_hat),
+                "roc_auc": roc_auc_score(y_test, y_hat),
+            }
+        )
 
     def evaluate(clf):
         y_hat = clf.predict(X_test)
