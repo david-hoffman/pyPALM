@@ -236,8 +236,8 @@ def _gauss(yw, xw, y0, x0, sy, sx):
     y = np.arange(yw)
     x = np.arange(xw)
     amp = 1 / (2 * np.pi * sy * sx)
-    gy = np.exp(-((y - y0) / sy) ** 2 / 2)
-    gx = np.exp(-((x - x0) / sx) ** 2 / 2)
+    gy = np.exp(-(((y - y0) / sy) ** 2) / 2)
+    gx = np.exp(-(((x - x0) / sx) ** 2) / 2)
     return amp * np.outer(gy, gx)
 
 
@@ -736,7 +736,7 @@ def gen_img_3d(yx_shape, df, zplanes, mag, diffraction_limit, num_workers=None):
         # find the fiducials worth rendering
         df_zplane = df[np.abs(df.z0 - zplane) < df.sigma_z * radius]
         # calculate the amplitude of the z gaussian.
-        amps = np.exp(-((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2 / 2) / (
+        amps = np.exp(-(((df_zplane.z0 - zplane) / df_zplane.sigma_z) ** 2) / 2) / (
             np.sqrt(2 * np.pi) * df_zplane.sigma_z
         )
         # generate a 2D image weighted by the z gaussian.
